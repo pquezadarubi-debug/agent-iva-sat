@@ -1448,12 +1448,14 @@ def chat_ia():
             client   = _anthropic.Anthropic(api_key=anthropic_key)
             messages = history[-10:] + [{"role": "user", "content": mensaje}]
             resp     = client.messages.create(
-                model="claude-sonnet-4-6",
+                model="claude-opus-4-5",
                 max_tokens=1024,
                 system=system_ctx,
                 messages=messages,
             )
             respuesta = resp.content[0].text
+        except ImportError:
+            pass  # anthropic no instalado, usar Gemini como fallback
         except Exception as exc:
             if not gemini_key:
                 return jsonify({"ok": False, "error": f"Error Claude API: {exc}"})
