@@ -1859,7 +1859,9 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
                 elif estado in (4, 5, 6):  # ERROR / RECHAZADA / VENCIDA
                     _log(f"ADVERTENCIA {desc_log}: estado {estado} — {status.get('CodigoEstadoSolicitud','')}")
                     return
-                # 1=ACEPTADA 2=EN_PROCESO → seguir esperando
+                # 1=ACEPTADA 2=EN_PROCESO → log cada 30s para mantener SSE vivo
+                if (intento + 1) % 6 == 0:
+                    _log(f"  Esperando SAT... {(intento+1)*5}s — estado {estado}")
             paquetes = status.get('IdsPaquetes', [])
             if not paquetes:
                 _log(f"  Sin paquetes para {desc_log}: {status.get('CodigoEstadoSolicitud','sin CFDIs')}")
@@ -2081,6 +2083,7 @@ def progreso_sat():
 
             if not done:
                 time.sleep(0.5)
+                yield ": keepalive\n\n"
 
         yield "data: DONE\n\n"
 
