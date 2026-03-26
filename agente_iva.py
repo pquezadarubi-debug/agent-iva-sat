@@ -1115,8 +1115,9 @@ def generar_excel(registros: list, movimientos: list,
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
-    # ── HOJA 1: Detalle Pagos ─────────────────────────────────────────────
-    ws1 = wb.create_sheet("Detalle Pagos")
+    # ── HOJA 1: Detalle (nombre según tipo) ──────────────────────────────
+    hoja1_nombre = "Detalle Cobros" if tipo == "trasladado" else "Detalle Pagos"
+    ws1 = wb.create_sheet(hoja1_nombre)
     encabezados = [
         "ID Cruce", "UUID Complemento", "Fecha Emisión CP", "Fecha Pago",
         "Forma de Pago", "Num. Operación Banco", "Banco Ordenante",
@@ -1456,13 +1457,18 @@ def marcar_pdf(movimientos: list, base_dir: Path, periodo_str: str) -> Path | No
 # ══════════════════════════════════════════════════════════════════════════════
 
 def guardar_auxiliar_sap_cruzado(df_sap: pd.DataFrame | None,
-                                  base_dir: Path, periodo_str: str) -> Path | None:
-    """Guarda el auxiliar SAP con columnas de cruce y colores."""
+                                  base_dir: Path, periodo_str: str,
+                                  tipo: str = "acreditable") -> Path | None:
+    """Guarda el auxiliar SAP con columnas de cruce y colores.
+    tipo='acreditable' → auxiliar_IVA_Acreditable_*.xlsx
+    tipo='trasladado'  → auxiliar_IVA_Trasladado_*.xlsx
+    """
     if df_sap is None:
         progreso("auxiliar_cruzado", 100, "No hay auxiliar SAP para guardar")
         return None
 
-    out_path = base_dir / "output" / f"auxiliar_sap_cruzado_{periodo_str}.xlsx"
+    label    = "IVA_Acreditable" if tipo == "acreditable" else "IVA_Trasladado"
+    out_path = base_dir / "output" / f"auxiliar_{label}_{periodo_str}.xlsx"
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Auxiliar Cruzado"
@@ -1826,8 +1832,13 @@ def main():
     progreso("pdf", 10, "Marcando PDF del estado de cuenta...")
     ruta_pdf = marcar_pdf(movimientos, base_dir, periodo_str)
 
-    # ── PASO 7: Auxiliar SAP cruzado ────────────────────────────────────────
-    ruta_sap_out = guardar_auxiliar_sap_cruzado(df_sap, base_dir, periodo_str)
+    # ── PASO 7: Auxiliares SAP cruzados ─────────────────────────────────────
+    progreso("auxiliar_cruzado", 10, "Guardando auxiliar SAP Acreditable cruzado...")
+    ruta_sap_out = guardar_auxiliar_sap_cruzado(df_sap_pago, base_dir,
+                                                 periodo_str, tipo="acreditable")
+    progreso("auxiliar_cruzado", 60, "Guardando auxiliar SAP Trasladado cruzado...")
+    ruta_sap_cobro_out = guardar_auxiliar_sap_cruzado(df_sap_cobro, base_dir,
+                                                       periodo_str, tipo="trasladado")
 
     # ── PASO 8: Escrito Word ─────────────────────────────────────────────────
     progreso("word", 10, "Generando escrito de devolución...")
@@ -1866,8 +1877,9 @@ def main():
     print(f"\nArchivos generados en output/:", flush=True)
     print(f"   {ruta_excel.name if ruta_excel else 'N/A'}", flush=True)
     print(f"   {ruta_excel_cobro.name if ruta_excel_cobro else 'N/A'}", flush=True)
-    print(f"   {ruta_pdf.name if ruta_pdf else 'N/A'}", flush=True)
     print(f"   {ruta_sap_out.name if ruta_sap_out else 'N/A'}", flush=True)
+    print(f"   {ruta_sap_cobro_out.name if ruta_sap_cobro_out else 'N/A'}", flush=True)
+    print(f"   {ruta_pdf.name if ruta_pdf else 'N/A'}", flush=True)
     print(f"   {ruta_word.name}", flush=True)
 
 

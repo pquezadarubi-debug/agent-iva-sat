@@ -580,9 +580,15 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     </div>
     <div class="er">
       <span class="eico">&#128200;</span>
-      <span class="enm" id="en-sap">auxiliar_sap_cruzado_YYYYMM.xlsx</span>
+      <span class="enm" id="en-sap">auxiliar_IVA_Acreditable_YYYYMM.xlsx</span>
       <span class="est" id="es-sap">Pendiente</span>
       <a class="btn sec" id="dl-sap" href="/download/sap" style="padding:4px 12px;font-size:11px;text-decoration:none">&#8659; Descargar</a>
+    </div>
+    <div class="er">
+      <span class="eico">&#128200;</span>
+      <span class="enm" id="en-sap-cobro">auxiliar_IVA_Trasladado_YYYYMM.xlsx</span>
+      <span class="est" id="es-sap-cobro">Pendiente</span>
+      <a class="btn sec" id="dl-sap-cobro" href="/download/sap_cobro" style="padding:4px 12px;font-size:11px;text-decoration:none">&#8659; Descargar</a>
     </div>
     <div class="er">
       <span class="eico">&#128221;</span>
@@ -885,11 +891,12 @@ ALLOWED_EXT = {
 }
 
 OUTPUT_MAP = {
-    "excel":       ("reporte_IVA_Acreditable_", ".xlsx"),
-    "excel_cobro": ("reporte_IVA_Trasladado_",  ".xlsx"),
-    "pdf":         ("estado_cuenta_",            ".pdf"),
-    "sap":         ("auxiliar_sap_",             ".xlsx"),
-    "word":        ("escrito_devolucion_",        ".docx"),
+    "excel":       ("reporte_IVA_Acreditable_",  ".xlsx"),
+    "excel_cobro": ("reporte_IVA_Trasladado_",   ".xlsx"),
+    "pdf":         ("estado_cuenta_",             ".pdf"),
+    "sap":         ("auxiliar_IVA_Acreditable_",  ".xlsx"),
+    "sap_cobro":   ("auxiliar_IVA_Trasladado_",   ".xlsx"),
+    "word":        ("escrito_devolucion_",         ".docx"),
 }
 
 
