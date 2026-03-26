@@ -512,29 +512,35 @@ def leer_auxiliar_sap(base_dir: Path) -> tuple[pd.DataFrame | None, dict, list]:
         return None, {}, ["No se encontro archivo Excel en aux_pagado/ ni auxiliar/"]
 
     advertencias = []
-    df = None
+    dfs = []
 
     for arch in archivos:
         try:
+            progreso("auxiliar_sap", 10, f"Leyendo {arch.name}...")
             # Intentar leer desde la primera hoja, tolerando encabezados sucios
             df_raw = pd.read_excel(arch, header=None, dtype=str)
             # Buscar fila de encabezado
             header_row = 0
             for idx, row in df_raw.iterrows():
                 vals = [str(v).lower().strip() for v in row if pd.notna(v)]
-                # Si la fila tiene palabras clave SAP, es el encabezado
                 keywords = ["fecha", "importe", "cuenta", "belnr", "budat", "belegnummer"]
                 if any(k in " ".join(vals) for k in keywords):
                     header_row = idx
                     break
-            df = pd.read_excel(arch, header=header_row, dtype=str)
-            df.columns = [str(c).strip() for c in df.columns]
-            break
+            df_arch = pd.read_excel(arch, header=header_row, dtype=str)
+            df_arch.columns = [str(c).strip() for c in df_arch.columns]
+            dfs.append(df_arch)
         except Exception as e:
             advertencias.append(f"Error leyendo {arch.name}: {e}")
 
-    if df is None:
+    if not dfs:
         return None, {}, advertencias
+
+    # Concatenar todos los Excel (pueden tener columnas ligeramente distintas)
+    try:
+        df = pd.concat(dfs, ignore_index=True)
+    except Exception:
+        df = dfs[0]
 
     # Mapear columnas
     col_map = {}
@@ -1027,7 +1033,9 @@ def generar_excel(registros: list, movimientos: list,
 
 def marcar_pdf(movimientos: list, base_dir: Path, periodo_str: str) -> Path | None:
     """Copia el PDF del estado de cuenta y agrega marcas de cruce en margen derecho."""
-    pdf_dir = base_dir / "input" / "estado_cuenta"
+    pdf_dir = base_dir / "input" / "pdf_bancos"
+    if not pdf_dir.exists() or not (list(pdf_dir.glob("*.pdf")) + list(pdf_dir.glob("*.PDF"))):
+        pdf_dir = base_dir / "input" / "estado_cuenta"
     pdfs    = list(pdf_dir.glob("*.pdf")) + list(pdf_dir.glob("*.PDF"))
     if not pdfs:
         progreso("pdf", 100, "No se encontró PDF para marcar")
@@ -1454,9 +1462,11 @@ def main():
                 pass
 
     # ── PASO 3: Lectura estado de cuenta ───────────────────────────────────
+    progreso("estado_cuenta", 5, "Leyendo PDFs del estado de cuenta...")
     movimientos = leer_estado_cuenta(base_dir)
 
     # ── PASO 4: Lectura auxiliar SAP ────────────────────────────────────────
+    progreso("auxiliar_sap", 5, "Leyendo auxiliar SAP...")
     df_sap, col_map, advert_sap = leer_auxiliar_sap(base_dir)
     for adv in advert_sap:
         print(f"ADVERTENCIA: {adv}", flush=True)
