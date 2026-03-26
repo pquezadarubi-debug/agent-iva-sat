@@ -669,6 +669,12 @@ _COL_MAP = {
     "cuenta":        ["cuenta", "cuenta mayor", "konto", "account", "gl account",
                       "cuenta gl"],
     "sociedad":      ["sociedad", "bukrs", "company code", "sociedad co."],
+    "importe_me":    ["importe en ml2", "importe ml2", "importe me",
+                      "importe moneda extranjera", "importe en moneda extranjera",
+                      "amount in foreign currency", "hwbas"],
+    "moneda_fuerte": ["mon.moneda fuerte", "moneda fuerte", "foreign currency",
+                      "moneda extranjera", "waers", "currency key",
+                      "mon. moneda fuerte"],
 }
 
 
@@ -930,10 +936,12 @@ def cruzar_con_sap(registros: list, df_sap: pd.DataFrame | None,
     df_sap["uuid_cfdi_sap"]  = ""
     df_sap["estado_cruce"]   = "Sin cruce"
 
-    col_ref  = col_map.get("referencia", "")
-    col_bel  = col_map.get("num_documento", "")
-    col_imp  = col_map.get("importe", "")
-    col_fec  = col_map.get("fecha", "")
+    col_ref       = col_map.get("referencia", "")
+    col_bel       = col_map.get("num_documento", "")
+    col_imp       = col_map.get("importe", "")       # Importe en moneda local (MXN)
+    col_imp_me    = col_map.get("importe_me", "")    # Importe en moneda extranjera (USD)
+    col_mon_fuerte= col_map.get("moneda_fuerte", "") # Columna Mon.Moneda fuerte
+    col_fec       = col_map.get("fecha", "")
 
     cruce_seq = [1000]  # secuencia SAP separada para evitar colisiones
 
@@ -951,12 +959,13 @@ def cruzar_con_sap(registros: list, df_sap: pd.DataFrame | None,
             break
 
     for r in registros:
-        num_op   = r["num_operacion"]
-        monto_r  = r["importe_pagado_mxn"]
-        iva_r    = r["iva16_mxn"]
-        fecha_p  = _fecha_a_date(r["fecha_pago"])
+        num_op    = r["num_operacion"]
+        moneda_r  = r.get("moneda_doc", "MXN")
+        monto_r   = (r["importe_pagado"] if moneda_r != "MXN"
+                     else r["importe_pagado_mxn"])
+        iva_r     = r["iva16_mxn"]
+        fecha_p   = _fecha_a_date(r["fecha_pago"])
 
-        # Tolerancia ampliada: hasta 2% del monto para decimales de tipo de cambio
         tol_din = max(TOLERANCIA_MONTO, monto_r * 0.005)
         tol_iva = max(TOLERANCIA_MONTO, iva_r   * 0.005)
 
@@ -964,11 +973,18 @@ def cruzar_con_sap(registros: list, df_sap: pd.DataFrame | None,
             if df_sap.at[idx, "estado_cruce"] == "Cruzado":
                 continue
 
-            ref_sap  = str(fila.get(col_ref,  "")).strip() if col_ref  else ""
-            bel_sap  = str(fila.get(col_bel,  "")).strip() if col_bel  else ""
-            asig_sap = str(fila.get(col_asig, "")).strip() if col_asig else ""
-            imp_str  = str(fila.get(col_imp,  "0")).strip() if col_imp  else "0"
+            ref_sap  = str(fila.get(col_ref,  "")).strip() if col_ref   else ""
+            bel_sap  = str(fila.get(col_bel,  "")).strip() if col_bel   else ""
+            asig_sap = str(fila.get(col_asig, "")).strip() if col_asig  else ""
             fec_str  = str(fila.get(col_fec,  "")).strip()  if col_fec  else ""
+
+            # Seleccionar columna de importe según moneda de la fila SAP
+            mon_fila = str(fila.get(col_mon_fuerte, "MXN") or "MXN").strip().upper()
+            if col_imp_me and mon_fila not in ("", "MXN", "NAN", "NONE"):
+                # Cuenta en moneda extranjera: usar Importe ML2
+                imp_str = str(fila.get(col_imp_me, "0") or "0").strip()
+            else:
+                imp_str = str(fila.get(col_imp, "0") or "0").strip() if col_imp else "0"
 
             imp_sap  = _parsear_monto(imp_str.replace(",", "."))
             fecha_s  = _fecha_a_date(fec_str)
