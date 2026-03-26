@@ -1873,6 +1873,7 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
                 except Exception as exc:
                     _log(f"  ADVERTENCIA descarga paquete {id_paquete}: {exc}")
 
+        rfc = str(signer.rfc)
         all_docto_uuids: set = set()
 
         # ── Fase 1: CFDIs tipo P ─────────────────────────────────────────────
@@ -1884,6 +1885,7 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
                 sat_svc.recover_comprobante_emitted_request,
                 "emitidos-P",
                 fecha_inicial=fecha_ini, fecha_final=fecha_fin,
+                rfc_emisor=rfc,
                 tipo_comprobante="P",
                 tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
             ):
@@ -1904,6 +1906,7 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
                 sat_svc.recover_comprobante_received_request,
                 "recibidos-P",
                 fecha_inicial=fecha_ini, fecha_final=fecha_fin,
+                rfc_receptor=rfc,
                 tipo_comprobante="P",
                 tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
             ):
@@ -1936,16 +1939,17 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
 
             total_fac = 0
 
-            for req_fn, desc in [
-                (sat_svc.recover_comprobante_emitted_request,  "emitidas-I"),
-                (sat_svc.recover_comprobante_received_request, "recibidas-I"),
+            for req_fn, desc, rfc_kwarg in [
+                (sat_svc.recover_comprobante_emitted_request,  "emitidas-I",  {"rfc_emisor": rfc}),
+                (sat_svc.recover_comprobante_received_request, "recibidas-I", {"rfc_receptor": rfc}),
             ]:
                 paq = 0
                 for _, data in _request_and_download(
                     req_fn, desc,
                     fecha_inicial=fac_ini, fecha_final=fac_fin_i,
                     tipo_comprobante="I",
-                    tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
+                    tipo_solicitud=TipoDescargaMasivaTerceros.CFDI,
+                    **rfc_kwarg
                 ):
                     paq += 1
                     xmls = _extract_from_zip(data, "I")
