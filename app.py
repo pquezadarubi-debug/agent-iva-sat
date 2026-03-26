@@ -499,36 +499,37 @@ function iniciar(){
   });
   showTab('procesando');
 
-  // Lanzar proceso en servidor
+  // Lanzar proceso y abrir SSE solo cuando el servidor confirme inicio
   fetch('/procesar',{method:'POST',headers:{'X-Sid':SID}})
     .then(r=>r.json())
-    .then(d=>{ if(d.error){ log(d.error,'err'); btn.disabled=false; btn.innerHTML='&#x25BA; PROCESAR AHORA'; return; } })
+    .then(d=>{
+      if(d.error){ log(d.error,'err'); btn.disabled=false; btn.innerHTML='&#x25BA; PROCESAR AHORA'; return; }
+      // Solo abrir SSE una vez confirmado el inicio
+      if(sse){sse.close();}
+      sse = new EventSource('/progreso?sid='+SID);
+      sse.onmessage = function(e){
+        const linea = e.data;
+        if(linea.startsWith('PROGRESO:')){
+          const p=linea.split(':'); if(p.length>=4) upd(p[1],p[2],p[3]);
+        } else if(linea.startsWith('RESULTADO:')){
+          const p=linea.split(':');
+          if(p.length>=5) finProceso({total:p[1],iva:p[2],cruces:p[3],sin_cruce:p[4]});
+        } else if(linea.startsWith('ERROR:')){
+          log(linea.substring(6),'err');
+          sse.close(); sse=null;
+          document.getElementById('btn-proc').disabled=false;
+          document.getElementById('btn-proc').innerHTML='&#x25BA; PROCESAR AHORA';
+        } else if(linea.startsWith('DONE')){
+          sse.close(); sse=null;
+        } else if(linea.trim()){
+          log(linea,'');
+        }
+      };
+      sse.onerror = function(){
+        if(sse) sse.close(); sse=null;
+      };
+    })
     .catch(e=>{ log('Error al iniciar: '+e,'err'); btn.disabled=false; btn.innerHTML='&#x25BA; PROCESAR AHORA'; });
-
-  // Iniciar SSE
-  if(sse){sse.close();}
-  sse = new EventSource('/progreso?sid='+SID);
-  sse.onmessage = function(e){
-    const linea = e.data;
-    if(linea.startsWith('PROGRESO:')){
-      const p=linea.split(':'); if(p.length>=4) upd(p[1],p[2],p[3]);
-    } else if(linea.startsWith('RESULTADO:')){
-      const p=linea.split(':');
-      if(p.length>=5) finProceso({total:p[1],iva:p[2],cruces:p[3],sin_cruce:p[4]});
-    } else if(linea.startsWith('ERROR:')){
-      log(linea.substring(6),'err');
-      sse.close(); sse=null;
-      document.getElementById('btn-proc').disabled=false;
-      document.getElementById('btn-proc').innerHTML='&#x25BA; PROCESAR AHORA';
-    } else if(linea.startsWith('DONE')){
-      sse.close(); sse=null;
-    } else if(linea.trim()){
-      log(linea,'');
-    }
-  };
-  sse.onerror = function(){
-    if(sse) sse.close(); sse=null;
-  };
 }
 
 function finProceso(d){
