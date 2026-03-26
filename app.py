@@ -682,10 +682,18 @@ header{background:var(--az);color:#fff;padding:10px 20px;
 
   <div class="card">
     <div class="ctitle" style="color:#C00000">&#128275; Descarga automática de CFDIs del SAT</div>
-    <p style="font-size:12px;color:#555;margin-bottom:12px">
+    <p style="font-size:12px;color:#555;margin-bottom:8px">
       Descarga tus CFDIs directamente del SAT usando tu <strong>e.firma (FIEL)</strong>.
       Solo necesitas el archivo <code>.cer</code>, el <code>.key</code> y la contraseña.
     </p>
+    <div style="background:#fff8e1;border-left:3px solid #f9a825;padding:8px 12px;border-radius:4px;font-size:12px;margin-bottom:14px;color:#555">
+      <strong>&#128221; Flujo automático:</strong>
+      <ol style="margin:4px 0 0 16px;padding:0">
+        <li><strong>Paso 1 —</strong> Descarga CFDIs de <strong>Pago (tipo P)</strong> del periodo indicado (emitidos y/o recibidos)</li>
+        <li><strong>Paso 2 —</strong> Extrae automáticamente los UUIDs de facturas relacionadas (DoctoRelacionado)</li>
+        <li><strong>Paso 3 —</strong> Descarga las <strong>Facturas (tipo I)</strong> correspondientes a esos UUIDs</li>
+      </ol>
+    </div>
 
     <!-- Certificados FIEL -->
     <div class="sat-fiel-grid">
@@ -707,18 +715,18 @@ header{background:var(--az);color:#fff;padding:10px 20px;
       </div>
     </div>
 
-    <!-- Contrasena -->
-    <div class="cfg-form" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:10px">
+    <!-- Contraseña y periodo de PAGO -->
+    <div class="cfg-form" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:6px">
       <div class="fld">
         <label>Contrase&ntilde;a e.firma</label>
         <input type="password" id="sat-pass" placeholder="Contrase&ntilde;a del certificado">
       </div>
       <div class="fld">
-        <label>Fecha inicio</label>
+        <label>Periodo de Pago — Fecha inicio <span style="color:#C00;font-size:10px">(tipo P)</span></label>
         <input type="date" id="sat-fecha-ini">
       </div>
       <div class="fld">
-        <label>Fecha fin</label>
+        <label>Periodo de Pago — Fecha fin <span style="color:#C00;font-size:10px">(tipo P)</span></label>
         <input type="date" id="sat-fecha-fin">
       </div>
     </div>
@@ -733,6 +741,30 @@ header{background:var(--az);color:#fff;padding:10px 20px;
         <input type="checkbox" id="sat-recibidos" checked>
         <strong>Recibidos</strong> &mdash; IVA Pagado (empresa = receptor)
       </label>
+    </div>
+
+    <!-- Opción avanzada: periodo manual para tipo I -->
+    <div style="margin-bottom:14px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#1565C0">
+        <input type="checkbox" id="sat-manual-i" onchange="toggleManualI(this.checked)">
+        &#128203; Especificar periodo distinto para Facturas tipo I (opcional)
+      </label>
+      <p style="font-size:11px;color:#888;margin:2px 0 0 24px">
+        Por defecto se buscan las facturas tipo I en los 2 años previos al periodo de pago.
+        Activa esta opción si las facturas pertenecen a un rango específico diferente.
+      </p>
+      <div id="sat-manual-i-panel" style="display:none;margin-top:10px">
+        <div class="cfg-form" style="grid-template-columns:1fr 1fr">
+          <div class="fld">
+            <label>Facturas tipo I — Fecha inicio</label>
+            <input type="date" id="sat-fac-ini">
+          </div>
+          <div class="fld">
+            <label>Facturas tipo I — Fecha fin</label>
+            <input type="date" id="sat-fac-fin">
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="btn-row">
@@ -1034,6 +1066,9 @@ function seleccionarFIEL(inp, tipo){
 
 // ─── SAT download ─────────────────────────────────────────────────────────
 let sseSAT = null;
+function toggleManualI(checked){
+  document.getElementById('sat-manual-i-panel').style.display = checked ? '' : 'none';
+}
 async function descargarSAT(){
   const btn = document.getElementById('btn-sat');
   const logbox = document.getElementById('sat-logbox');
@@ -1046,10 +1081,18 @@ async function descargarSAT(){
   if(!pass){ satLogMsg('ERROR: Ingresa la contraseña de tu e.firma','err'); return; }
   const fechaIni = document.getElementById('sat-fecha-ini').value;
   const fechaFin = document.getElementById('sat-fecha-fin').value;
-  if(!fechaIni || !fechaFin){ satLogMsg('ERROR: Selecciona el rango de fechas','err'); return; }
+  if(!fechaIni || !fechaFin){ satLogMsg('ERROR: Selecciona el rango de fechas del periodo de Pago (tipo P)','err'); return; }
   const emitidos  = document.getElementById('sat-emitidos').checked;
   const recibidos = document.getElementById('sat-recibidos').checked;
   if(!emitidos && !recibidos){ satLogMsg('ERROR: Selecciona al menos un tipo (emitidos o recibidos)','err'); return; }
+
+  // Periodo manual para tipo I (opcional)
+  const manualI = document.getElementById('sat-manual-i').checked;
+  const facIni  = manualI ? document.getElementById('sat-fac-ini').value : '';
+  const facFin  = manualI ? document.getElementById('sat-fac-fin').value : '';
+  if(manualI && (!facIni || !facFin)){
+    satLogMsg('ERROR: Especifica las fechas del periodo de Facturas tipo I','err'); return;
+  }
 
   btn.disabled = true;
   btn.textContent = '... Descargando';
@@ -1064,6 +1107,7 @@ async function descargarSAT(){
   fd.append('fecha_fin', fechaFin);
   fd.append('emitidos',  emitidos  ? '1' : '0');
   fd.append('recibidos', recibidos ? '1' : '0');
+  if(manualI){ fd.append('fac_ini', facIni); fd.append('fac_fin', facFin); }
 
   const r = await fetch('/descargar_sat', {method:'POST', body:fd, headers:{'X-Sid':SID}});
   const d = await r.json();
@@ -1705,7 +1749,8 @@ def limpiar():
 def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
                          key_bytes: bytes, password: str,
                          fecha_ini, fecha_fin,
-                         emitidos: bool, recibidos: bool):
+                         emitidos: bool, recibidos: bool,
+                         fac_ini_override=None, fac_fin_override=None):
     """Background thread: descarga CFDIs tipo P del SAT usando FIEL,
     luego descarga las facturas tipo I relacionadas (DoctoRelacionado)."""
     import zipfile as _zipfile, io as _io
@@ -1877,10 +1922,17 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
             facturas_dir = base_dir / "input" / "cfdi_facturas"
             facturas_dir.mkdir(parents=True, exist_ok=True)
 
-            try:
-                fac_ini = _dt.date(max(2020, fecha_ini.year - 2), 1, 1)
-            except Exception:
-                fac_ini = fecha_ini
+            if fac_ini_override and fac_fin_override:
+                fac_ini = fac_ini_override
+                fac_fin_i = fac_fin_override
+                _log(f"Usando periodo manual para tipo I: {fac_ini} a {fac_fin_i}")
+            else:
+                try:
+                    fac_ini = _dt.date(max(2020, fecha_ini.year - 2), 1, 1)
+                except Exception:
+                    fac_ini = fecha_ini
+                fac_fin_i = fecha_fin
+                _log(f"Periodo automático tipo I: {fac_ini} a {fac_fin_i} (2 años atrás)")
 
             total_fac = 0
 
@@ -1891,7 +1943,7 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
                 paq = 0
                 for _, data in _request_and_download(
                     req_fn, desc,
-                    fecha_inicial=fac_ini, fecha_final=fecha_fin,
+                    fecha_inicial=fac_ini, fecha_final=fac_fin_i,
                     tipo_comprobante="I",
                     tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
                 ):
@@ -1940,6 +1992,8 @@ def descargar_sat():
     fecha_fin_s = request.form.get("fecha_fin", "")
     emitidos   = request.form.get("emitidos", "0") == "1"
     recibidos  = request.form.get("recibidos", "0") == "1"
+    fac_ini_s  = request.form.get("fac_ini", "").strip()
+    fac_fin_s  = request.form.get("fac_fin", "").strip()
 
     try:
         import datetime as _dt
@@ -1947,6 +2001,15 @@ def descargar_sat():
         fecha_fin = _dt.date.fromisoformat(fecha_fin_s)
     except Exception:
         return jsonify({"ok": False, "error": "Fechas inválidas (use YYYY-MM-DD)"}), 400
+
+    fac_ini_override = None
+    fac_fin_override = None
+    if fac_ini_s and fac_fin_s:
+        try:
+            fac_ini_override = _dt.date.fromisoformat(fac_ini_s)
+            fac_fin_override = _dt.date.fromisoformat(fac_fin_s)
+        except Exception:
+            return jsonify({"ok": False, "error": "Fechas de facturas tipo I inválidas"}), 400
 
     cer_bytes = cer_f.read()
     key_bytes = key_f.read()
@@ -1958,7 +2021,8 @@ def descargar_sat():
     t = threading.Thread(
         target=_sat_download_worker,
         args=(sid, base_dir, cer_bytes, key_bytes, password,
-              fecha_ini, fecha_fin, emitidos, recibidos),
+              fecha_ini, fecha_fin, emitidos, recibidos,
+              fac_ini_override, fac_fin_override),
         daemon=True,
     )
     with _sat_threads_lock:
