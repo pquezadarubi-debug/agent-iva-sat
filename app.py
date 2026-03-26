@@ -499,6 +499,12 @@ function iniciar(){
   });
   showTab('procesando');
 
+  // Lanzar proceso en servidor
+  fetch('/procesar',{method:'POST',headers:{'X-Sid':SID}})
+    .then(r=>r.json())
+    .then(d=>{ if(d.error){ log(d.error,'err'); btn.disabled=false; btn.innerHTML='&#x25BA; PROCESAR AHORA'; return; } })
+    .catch(e=>{ log('Error al iniciar: '+e,'err'); btn.disabled=false; btn.innerHTML='&#x25BA; PROCESAR AHORA'; });
+
   // Iniciar SSE
   if(sse){sse.close();}
   sse = new EventSource('/progreso?sid='+SID);
