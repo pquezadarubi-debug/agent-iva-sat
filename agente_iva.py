@@ -696,21 +696,23 @@ def _detectar_columna(df_cols: list, candidatos: list) -> str | None:
     return None
 
 
-def leer_auxiliar_sap(base_dir: Path) -> tuple[pd.DataFrame | None, dict, list]:
+def leer_auxiliar_sap(base_dir: Path,
+                      carpeta: str = "aux_pagado") -> tuple[pd.DataFrame | None, dict, list]:
     """
     Lee el Excel de auxiliar SAP.
+    carpeta: 'aux_pagado' (IVA acreditable) o 'aux_cobrado' (IVA trasladado)
     Retorna (df_original, col_map, advertencias).
     """
-    # Buscar en aux_pagado (nuevo) o auxiliar (legacy)
     def _xls(d): return (list(d.glob("*.xlsx")) + list(d.glob("*.xls")) +
                          list(d.glob("*.XLSX")) + list(d.glob("*.XLS")))
-    aux_dir  = base_dir / "input" / "aux_pagado"
+    aux_dir  = base_dir / "input" / carpeta
     archivos = _xls(aux_dir)
     if not archivos:
+        # Legacy fallback
         aux_dir  = base_dir / "input" / "auxiliar"
         archivos = _xls(aux_dir)
     if not archivos:
-        return None, {}, ["No se encontro archivo Excel en aux_pagado/ ni auxiliar/"]
+        return None, {}, [f"No se encontro archivo Excel en {carpeta}/ ni auxiliar/"]
 
     advertencias = []
     dfs = []
@@ -1101,9 +1103,15 @@ def _color_fila(r: dict) -> tuple[str, str]:
 
 def generar_excel(registros: list, movimientos: list,
                   df_sap: pd.DataFrame | None, errores: list,
-                  base_dir: Path, periodo_str: str) -> Path:
-    """Genera el Excel con 6 hojas de reporte."""
-    out_path = base_dir / "output" / f"reporte_iva_{periodo_str}.xlsx"
+                  base_dir: Path, periodo_str: str,
+                  tipo: str = "acreditable") -> Path:
+    """
+    Genera el Excel de reporte.
+    tipo='acreditable' → IVA Pagado a Proveedores
+    tipo='trasladado'  → IVA Cobrado a Clientes
+    """
+    label   = "IVA_Acreditable" if tipo == "acreditable" else "IVA_Trasladado"
+    out_path = base_dir / "output" / f"reporte_{label}_{periodo_str}.xlsx"
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
@@ -1765,26 +1773,54 @@ def main():
     progreso("estado_cuenta", 5, "Leyendo PDFs del estado de cuenta...")
     movimientos = leer_estado_cuenta(base_dir)
 
-    # ── PASO 4: Lectura auxiliar SAP ────────────────────────────────────────
-    progreso("auxiliar_sap", 5, "Leyendo auxiliar SAP...")
-    df_sap, col_map, advert_sap = leer_auxiliar_sap(base_dir)
-    for adv in advert_sap:
+    # ── PASO 4a: Auxiliar SAP IVA Acreditable (pagado) ─────────────────────
+    progreso("auxiliar_sap", 5, "Leyendo auxiliar SAP IVA Acreditable...")
+    df_sap_pago, col_map_pago, adv_pago = leer_auxiliar_sap(base_dir, "aux_pagado")
+    for adv in adv_pago:
         print(f"ADVERTENCIA: {adv}", flush=True)
 
-    # ── Cruce con banco ─────────────────────────────────────────────────────
-    progreso("cruce_banco", 10, "Cruzando CFDIs con estado de cuenta...")
-    cruce_banco = cruzar_con_banco(registros, movimientos, periodo_str)
+    # ── PASO 4b: Auxiliar SAP IVA Trasladado (cobrado) ──────────────────────
+    progreso("auxiliar_sap", 20, "Leyendo auxiliar SAP IVA Trasladado...")
+    df_sap_cobro, col_map_cobro, adv_cobro = leer_auxiliar_sap(base_dir, "aux_cobrado")
+    for adv in adv_cobro:
+        print(f"ADVERTENCIA: {adv}", flush=True)
+
+    # ── Cruce PAGOS con banco ────────────────────────────────────────────────
+    progreso("cruce_banco", 10, "Cruzando CFDIs de pago con banco...")
+    cruce_banco_pago = cruzar_con_banco(registros_pago, movimientos, periodo_str)
+    progreso("cruce_banco", 50,
+             f"Cruce banco pagos: {cruce_banco_pago}/{len(registros_pago)}")
+
+    # ── Cruce COBROS con banco ───────────────────────────────────────────────
+    progreso("cruce_banco", 60, "Cruzando CFDIs de cobro con banco...")
+    cruce_banco_cobro = cruzar_con_banco(registros_cobro, movimientos, periodo_str)
     progreso("cruce_banco", 100,
-             f"Cruce banco: {cruce_banco}/{len(registros)} registros")
+             f"Cruce banco cobros: {cruce_banco_cobro}/{len(registros_cobro)}")
 
-    # ── Cruce con SAP ───────────────────────────────────────────────────────
-    progreso("auxiliar_sap", 10, "Cruzando con auxiliar SAP...")
-    cruce_sap = cruzar_con_sap(registros, df_sap, col_map, periodo_str)
+    # ── Cruce PAGOS con SAP Acreditable ─────────────────────────────────────
+    progreso("auxiliar_sap", 40, "Cruzando pagos con auxiliar SAP...")
+    cruce_sap_pago = cruzar_con_sap(registros_pago, df_sap_pago,
+                                     col_map_pago, periodo_str)
 
-    # ── PASO 5: Excel reporte ───────────────────────────────────────────────
-    progreso("excel", 10, "Generando Excel de reporte...")
-    ruta_excel = generar_excel(registros, movimientos, df_sap,
-                               errores_cfdi, base_dir, periodo_str)
+    # ── Cruce COBROS con SAP Trasladado ──────────────────────────────────────
+    progreso("auxiliar_sap", 70, "Cruzando cobros con auxiliar SAP...")
+    cruce_sap_cobro = cruzar_con_sap(registros_cobro, df_sap_cobro,
+                                      col_map_cobro, periodo_str)
+
+    # Variables legacy para compatibilidad con generadores
+    registros = registros_pago
+    df_sap    = df_sap_pago
+    col_map   = col_map_pago
+
+    # ── PASO 5: Excel reportes (uno por tipo) ───────────────────────────────
+    progreso("excel", 10, "Generando reporte IVA Acreditable...")
+    ruta_excel = generar_excel(registros_pago, movimientos, df_sap_pago,
+                               errores_cfdi, base_dir, periodo_str,
+                               tipo="acreditable")
+    progreso("excel", 60, "Generando reporte IVA Trasladado...")
+    ruta_excel_cobro = generar_excel(registros_cobro, movimientos, df_sap_cobro,
+                                     errores_cfdi, base_dir, periodo_str,
+                                     tipo="trasladado")
 
     # ── PASO 6: PDF marcado ─────────────────────────────────────────────────
     progreso("pdf", 10, "Marcando PDF del estado de cuenta...")
@@ -1829,6 +1865,7 @@ def main():
     print(f"[!!] Cruce debil (revisar manualmente)      : {debiles_n} movimientos", flush=True)
     print(f"\nArchivos generados en output/:", flush=True)
     print(f"   {ruta_excel.name if ruta_excel else 'N/A'}", flush=True)
+    print(f"   {ruta_excel_cobro.name if ruta_excel_cobro else 'N/A'}", flush=True)
     print(f"   {ruta_pdf.name if ruta_pdf else 'N/A'}", flush=True)
     print(f"   {ruta_sap_out.name if ruta_sap_out else 'N/A'}", flush=True)
     print(f"   {ruta_word.name}", flush=True)
