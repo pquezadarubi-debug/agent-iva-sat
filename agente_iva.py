@@ -1003,129 +1003,129 @@ def cruzar_con_sap(registros: list, df_sap: pd.DataFrame | None,
                    col_map: dict, periodo_str: str) -> int:
     """
     Cruza registros de CFDI con filas del auxiliar SAP.
-    Agrega columnas id_cruce, uuid_cfdi, estado_cruce al df_sap.
+    Usa pre-índices para evitar O(N×M) con iterrows.
     """
     if df_sap is None:
         return 0
 
-    df_sap["id_cruce_sap"]   = ""
-    df_sap["uuid_cfdi_sap"]  = ""
-    df_sap["estado_cruce"]   = "Sin cruce"
+    df_sap["id_cruce_sap"]  = ""
+    df_sap["uuid_cfdi_sap"] = ""
+    df_sap["estado_cruce"]  = "Sin cruce"
 
-    col_ref       = col_map.get("referencia", "")
-    col_bel       = col_map.get("num_documento", "")
-    col_imp       = col_map.get("importe", "")       # Importe en moneda local (MXN)
-    col_imp_me    = col_map.get("importe_me", "")    # Importe en moneda extranjera (USD)
-    col_mon_fuerte= col_map.get("moneda_fuerte", "") # Columna Mon.Moneda fuerte
-    col_fec       = col_map.get("fecha", "")
+    col_ref        = col_map.get("referencia", "")
+    col_bel        = col_map.get("num_documento", "")
+    col_imp        = col_map.get("importe", "")
+    col_imp_me     = col_map.get("importe_me", "")
+    col_mon_fuerte = col_map.get("moneda_fuerte", "")
+    col_fec        = col_map.get("fecha", "")
+    col_asig       = next((c for c in df_sap.columns
+                           if "asignaci" in c.lower()), None)
 
-    cruce_seq = [1000]  # secuencia SAP separada para evitar colisiones
-
+    cruce_seq = [1000]
     def nuevo_id_sap():
         cruce_seq[0] += 1
         return f"{PREFIJO_CRUCE}-{periodo_str}-{cruce_seq[0]:04d}"
 
-    total_cruce = 0
+    # ── Pre-computar toda la info de filas SAP UNA sola vez ──────────────────
+    # ref_idx / bel_idx / asig_idx: para búsquedas exactas O(1)
+    ref_idx:  dict = {}
+    bel_idx:  dict = {}
+    asig_idx: dict = {}
+    # rows_cache: lista de (idx, imp_sap, fecha_s) para búsqueda por monto
+    rows_cache: list = []
 
-    # Columna adicional de asignación (puede ser referencia de banco)
-    col_asig = None
-    for cname in df_sap.columns:
-        if "asignaci" in cname.lower() or "asignacion" in cname.lower():
-            col_asig = cname
-            break
+    for idx, fila in df_sap.iterrows():
+        ref  = str(fila.get(col_ref,  "") or "").strip() if col_ref  else ""
+        bel  = str(fila.get(col_bel,  "") or "").strip() if col_bel  else ""
+        asig = str(fila.get(col_asig, "") or "").strip() if col_asig else ""
 
+        if ref:
+            ref_idx.setdefault(ref, []).append(idx)
+        if bel:
+            bel_idx.setdefault(bel, []).append(idx)
+        if asig:
+            asig_norm = re.sub(r"20\d{2}.*$", "", asig.replace(" ", "")).strip()
+            asig_idx.setdefault(asig, []).append(idx)
+            if asig_norm and asig_norm != asig:
+                asig_idx.setdefault(asig_norm, []).append(idx)
+
+        mon_fila = str(fila.get(col_mon_fuerte, "MXN") or "MXN").strip().upper()
+        is_usd   = bool(col_imp_me and mon_fila not in ("", "MXN", "NAN", "NONE"))
+        col_use  = col_imp_me if is_usd else col_imp
+        imp_str  = str(fila.get(col_use, "0") or "0").strip() if col_use else "0"
+        imp_sap  = _parsear_monto(imp_str.replace(",", "."))
+
+        fec_str = str(fila.get(col_fec, "") or "").strip() if col_fec else ""
+        fecha_s = _fecha_a_date(fec_str)
+
+        rows_cache.append((idx, imp_sap, fecha_s))
+
+    # Conjunto de índices ya usados (más rápido que leer df_sap.at cada vez)
+    used_idxs: set = set()
+    total_cruce   = 0
+
+    # ── Cruce por registro ───────────────────────────────────────────────────
     for r in registros:
-        num_op    = r["num_operacion"]
-        moneda_r  = r.get("moneda_doc", "MXN")
-        monto_r   = (r["importe_pagado"] if moneda_r != "MXN"
-                     else r["importe_pagado_mxn"])
-        iva_r     = r["iva16_mxn"]
-        fecha_p   = _fecha_a_date(r["fecha_pago"])
+        num_op   = r["num_operacion"]
+        moneda_r = r.get("moneda_doc", "MXN")
+        monto_r  = (r["importe_pagado"] if moneda_r != "MXN"
+                    else r["importe_pagado_mxn"])
+        iva_r    = r["iva16_mxn"]
+        fecha_p  = _fecha_a_date(r["fecha_pago"])
+        tol_din  = max(TOLERANCIA_MONTO, monto_r * 0.005)
+        tol_iva  = max(TOLERANCIA_MONTO, iva_r   * 0.005)
 
-        tol_din = max(TOLERANCIA_MONTO, monto_r * 0.005)
-        tol_iva = max(TOLERANCIA_MONTO, iva_r   * 0.005)
+        matched_idx  = None
+        match_strong = True   # True = Cruzado, False = Cruce debil
 
-        for idx, fila in df_sap.iterrows():
-            if df_sap.at[idx, "estado_cruce"] == "Cruzado":
-                continue
-
-            ref_sap  = str(fila.get(col_ref,  "")).strip() if col_ref   else ""
-            bel_sap  = str(fila.get(col_bel,  "")).strip() if col_bel   else ""
-            asig_sap = str(fila.get(col_asig, "")).strip() if col_asig  else ""
-            fec_str  = str(fila.get(col_fec,  "")).strip()  if col_fec  else ""
-
-            # Seleccionar columna de importe según moneda de la fila SAP
-            mon_fila = str(fila.get(col_mon_fuerte, "MXN") or "MXN").strip().upper()
-            if col_imp_me and mon_fila not in ("", "MXN", "NAN", "NONE"):
-                # Cuenta en moneda extranjera: usar Importe ML2
-                imp_str = str(fila.get(col_imp_me, "0") or "0").strip()
-            else:
-                imp_str = str(fila.get(col_imp, "0") or "0").strip() if col_imp else "0"
-
-            imp_sap  = _parsear_monto(imp_str.replace(",", "."))
-            fecha_s  = _fecha_a_date(fec_str)
-
-            # Normalizar asignación: quitar sufijo de año (ej. "15000001172026 *" → "1500000117")
-            asig_norm = re.sub(r"20\d{2}.*$", "", asig_sap.replace(" ", "")).strip()
-
-            # Nivel 1: Exacto por referencia, BELNR o asignación == NumOperacion
-            if num_op and (ref_sap == num_op or bel_sap == num_op
-                           or asig_sap.startswith(num_op) or asig_norm == num_op):
-                id_uso = r["id_cruce"] if r["id_cruce"] else nuevo_id_sap()
-                df_sap.at[idx, "id_cruce_sap"]  = id_uso
-                df_sap.at[idx, "uuid_cfdi_sap"] = r["uuid_cp"]
-                df_sap.at[idx, "estado_cruce"]  = "Cruzado"
-                r["cruce_sap"] = True
-                if not r["id_cruce"]:
-                    r["id_cruce"] = id_uso
-                total_cruce += 1
-                break
-
-            # Nivel 2a: IVA del CFDI == importe SAP + Fecha
-            if iva_r > 0 and abs(abs(imp_sap) - iva_r) <= tol_iva:
-                if fecha_p and fecha_s:
-                    if abs((fecha_p - fecha_s).days) <= TOLERANCIA_DIAS:
-                        id_uso = r["id_cruce"] if r["id_cruce"] else nuevo_id_sap()
-                        df_sap.at[idx, "id_cruce_sap"]  = id_uso
-                        df_sap.at[idx, "uuid_cfdi_sap"] = r["uuid_cp"]
-                        df_sap.at[idx, "estado_cruce"]  = "Cruzado"
-                        r["cruce_sap"] = True
-                        if not r["id_cruce"]:
-                            r["id_cruce"] = id_uso
-                        total_cruce += 1
-                        break
-
-            # Nivel 2b: Monto total del CFDI == importe SAP + Fecha
-            if abs(abs(imp_sap) - monto_r) <= tol_din:
-                if fecha_p and fecha_s:
-                    if abs((fecha_p - fecha_s).days) <= TOLERANCIA_DIAS:
-                        id_uso = r["id_cruce"] if r["id_cruce"] else nuevo_id_sap()
-                        df_sap.at[idx, "id_cruce_sap"]  = id_uso
-                        df_sap.at[idx, "uuid_cfdi_sap"] = r["uuid_cp"]
-                        df_sap.at[idx, "estado_cruce"]  = "Cruzado"
-                        r["cruce_sap"] = True
-                        if not r["id_cruce"]:
-                            r["id_cruce"] = id_uso
-                        total_cruce += 1
-                        break
-
-        # Nivel 3: Solo IVA o monto (cruce débil)
-        if not r["cruce_sap"]:
-            for idx, fila in df_sap.iterrows():
-                if df_sap.at[idx, "estado_cruce"] != "Sin cruce":
-                    continue
-                imp_str = str(fila.get(col_imp, "0")).strip() if col_imp else "0"
-                imp_sap = _parsear_monto(imp_str.replace(",", "."))
-                if (iva_r > 0 and abs(abs(imp_sap) - iva_r) <= tol_iva) or \
-                   abs(abs(imp_sap) - monto_r) <= tol_din:
-                    id_uso = r["id_cruce"] if r["id_cruce"] else nuevo_id_sap()
-                    df_sap.at[idx, "id_cruce_sap"]  = id_uso
-                    df_sap.at[idx, "uuid_cfdi_sap"] = r["uuid_cp"]
-                    df_sap.at[idx, "estado_cruce"]  = "Cruce debil"
-                    r["cruce_sap"] = True
-                    if not r["id_cruce"]:
-                        r["id_cruce"] = id_uso
+        # ── Nivel 1: exacto por NumOperacion ─────────────────────────────
+        if num_op:
+            asig_norm_op = re.sub(r"20\d{2}.*$", "", num_op.replace(" ", "")).strip()
+            for idx in (ref_idx.get(num_op, []) +
+                        bel_idx.get(num_op, []) +
+                        asig_idx.get(num_op, []) +
+                        (asig_idx.get(asig_norm_op, []) if asig_norm_op != num_op else [])):
+                if idx not in used_idxs:
+                    matched_idx = idx
                     break
+
+        # ── Niveles 2+3: una sola pasada ─────────────────────────────────
+        if matched_idx is None:
+            n3_idx = None
+            for idx, imp_sap, fecha_s in rows_cache:
+                if idx in used_idxs:
+                    continue
+                imp_abs = abs(imp_sap)
+                # Nivel 2a: IVA + fecha
+                if iva_r > 0 and abs(imp_abs - iva_r) <= tol_iva:
+                    if fecha_p and fecha_s and abs((fecha_p - fecha_s).days) <= TOLERANCIA_DIAS:
+                        matched_idx = idx
+                        break
+                # Nivel 2b: monto + fecha
+                if abs(imp_abs - monto_r) <= tol_din:
+                    if fecha_p and fecha_s and abs((fecha_p - fecha_s).days) <= TOLERANCIA_DIAS:
+                        matched_idx = idx
+                        break
+                # Nivel 3: solo monto (guardar primero candidato débil)
+                if n3_idx is None:
+                    if (iva_r > 0 and abs(imp_abs - iva_r) <= tol_iva) or \
+                       abs(imp_abs - monto_r) <= tol_din:
+                        n3_idx = idx
+            if matched_idx is None and n3_idx is not None:
+                matched_idx  = n3_idx
+                match_strong = False
+
+        # ── Aplicar cruce ─────────────────────────────────────────────────
+        if matched_idx is not None:
+            id_uso = r["id_cruce"] if r["id_cruce"] else nuevo_id_sap()
+            df_sap.at[matched_idx, "id_cruce_sap"]  = id_uso
+            df_sap.at[matched_idx, "uuid_cfdi_sap"] = r["uuid_cp"]
+            df_sap.at[matched_idx, "estado_cruce"]  = "Cruzado" if match_strong else "Cruce debil"
+            r["cruce_sap"] = True
+            if not r["id_cruce"]:
+                r["id_cruce"] = id_uso
+            used_idxs.add(matched_idx)
+            total_cruce += 1
 
     progreso("auxiliar_sap", 100, f"Auxiliar SAP cruzado: {total_cruce} coincidencias")
     return total_cruce
