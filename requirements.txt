@@ -1,0 +1,9 @@
+flask>=3.0
+openpyxl
+pandas
+pdfplumber
+pymupdf
+python-docx
+num2words
+gunicorn
+werkzeug>=3.0

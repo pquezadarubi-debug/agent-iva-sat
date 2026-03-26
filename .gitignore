@@ -1,0 +1,23 @@
+# Datos sensibles — NO subir al repo
+input/cfdi/
+input/estado_cuenta/
+input/auxiliar/
+input/machote/
+input/config.json
+output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sesiones temporales
+/tmp/
