@@ -1959,9 +1959,24 @@ def analizar_riesgos_ia(registros_pago: list, cfg: dict) -> dict | None:
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
     gemini_key    = os.environ.get("GEMINI_API_KEY", "")
 
+    # Si no hay claves en entorno, intentar leerlas del archivo de sesión
+    if not anthropic_key or not gemini_key:
+        base_dir_str = cfg.get("base_dir")
+        if base_dir_str:
+            api_keys_path = Path(base_dir_str) / "input" / "api_keys.json"
+            if api_keys_path.exists():
+                try:
+                    stored = json.loads(api_keys_path.read_text(encoding="utf-8"))
+                    if not anthropic_key:
+                        anthropic_key = stored.get("anthropic_key", "")
+                    if not gemini_key:
+                        gemini_key = stored.get("gemini_key", "")
+                except Exception:
+                    pass
+
     if not anthropic_key and not gemini_key:
         progreso("riesgos", 0,
-                 "ADVERTENCIA: ANTHROPIC_API_KEY y GEMINI_API_KEY no configuradas — omitiendo análisis IA")
+                 "ADVERTENCIA: Sin clave API de IA — configura Anthropic o Gemini para análisis de riesgos")
         return None
 
     if not registros_pago:
@@ -2330,6 +2345,7 @@ def main():
     ruta_riesgos = None
     cfg_riesgos = dict(cfg)
     cfg_riesgos["periodo_str"] = periodo_str
+    cfg_riesgos["base_dir"] = str(base_dir)
     progreso("riesgos", 5, "Iniciando análisis de riesgos con IA...")
     analisis_ia = analizar_riesgos_ia(registros_pago, cfg_riesgos)
     if analisis_ia is not None:
