@@ -731,28 +731,8 @@ function iniciar(){
       // Solo abrir SSE una vez confirmado el inicio
       if(sse){sse.close();}
       sse = new EventSource('/progreso?sid='+SID);
-      sse.onmessage = function(e){
-        const linea = e.data;
-        if(linea.startsWith('PROGRESO:')){
-          const p=linea.split(':'); if(p.length>=4) upd(p[1],p[2],p[3]);
-        } else if(linea.startsWith('RESULTADO:')){
-          const p=linea.split(':');
-          if(p.length>=5) finProceso({total:p[1],iva:p[2],cruces:p[3],sin_cruce:p[4],
-            trasladado:p[5]||'0',acreditable:p[6]||'0',saldo:p[7]||'0'});
-        } else if(linea.startsWith('ERROR:')){
-          log(linea.substring(6),'err');
-          sse.close(); sse=null;
-          document.getElementById('btn-proc').disabled=false;
-          document.getElementById('btn-proc').innerHTML='&#x25BA; PROCESAR AHORA';
-        } else if(linea.startsWith('DONE')){
-          sse.close(); sse=null;
-        } else if(linea.trim()){
-          log(linea,'');
-        }
-      };
-      sse.onerror = function(){
-        if(sse) sse.close(); sse=null;
-      };
+      sse.onmessage = manejarSSE;
+      sse.onerror = function(){if(sse)sse.close();sse=null;};
     })
     .catch(e=>{ log('Error al iniciar: '+e,'err'); btn.disabled=false; btn.innerHTML='&#x25BA; PROCESAR AHORA'; });
 }
@@ -812,6 +792,54 @@ async function limpiar(){
 }
 
 actualizarEstado();
+
+// Al cargar: verificar si hay proceso activo o terminado
+(async function verificarProceso(){
+  const d = await (await fetch('/estado_proceso',{headers:{'X-Sid':SID}})).json();
+  if(d.activo){
+    // Proceso corriendo — reconectar SSE
+    log('Proceso en curso detectado, reconectando...','warn');
+    showTab('procesando');
+    document.getElementById('btn-proc').disabled=true;
+    document.getElementById('btn-proc').textContent='... Procesando';
+    if(sse){sse.close();}
+    sse = new EventSource('/progreso?sid='+SID);
+    sse.onmessage = manejarSSE;
+    sse.onerror = function(){if(sse)sse.close();sse=null;};
+  } else if(d.terminado && d.log){
+    // Proceso ya terminó — reproducir resultado del log
+    const lineas = d.log.split('\n');
+    for(const l of lineas){
+      const linea = l.trim();
+      if(!linea) continue;
+      if(linea.startsWith('PROGRESO:')){
+        const p=linea.split(':');if(p.length>=4)upd(p[1],p[2],p[3]);
+      } else if(linea.startsWith('RESULTADO:')){
+        const p=linea.split(':');
+        if(p.length>=5) finProceso({total:p[1],iva:p[2],cruces:p[3],sin_cruce:p[4],
+          trasladado:p[5]||'0',acreditable:p[6]||'0',saldo:p[7]||'0'});
+      }
+    }
+  }
+})();
+
+function manejarSSE(e){
+  const linea=e.data;
+  if(linea.startsWith('PROGRESO:')){
+    const p=linea.split(':');if(p.length>=4)upd(p[1],p[2],p[3]);
+  } else if(linea.startsWith('RESULTADO:')){
+    const p=linea.split(':');
+    if(p.length>=5) finProceso({total:p[1],iva:p[2],cruces:p[3],sin_cruce:p[4],
+      trasladado:p[5]||'0',acreditable:p[6]||'0',saldo:p[7]||'0'});
+  } else if(linea.startsWith('ERROR:')){
+    log(linea.substring(6),'err');
+    if(sse){sse.close();sse=null;}
+    document.getElementById('btn-proc').disabled=false;
+    document.getElementById('btn-proc').innerHTML='&#x25BA; PROCESAR AHORA';
+  } else if(linea.startsWith('DONE')){
+    if(sse){sse.close();sse=null;}
+  } else if(linea.trim()){log(linea,'');}
+}
 </script>
 </body>
 </html>
@@ -1007,7 +1035,7 @@ def estado():
 
 @app.route("/procesar", methods=["POST"])
 def procesar():
-    """Lanza agente en background; el progreso se lee con /progreso (SSE)."""
+    """Lanza agente en background; stdout se escribe a progress.log."""
     sid = _sid_from_request()
     if not _check_sid(sid):
         return jsonify({"ok": False}), 400
@@ -1016,57 +1044,108 @@ def procesar():
         if sid in _procs and _procs[sid].poll() is None:
             return jsonify({"ok": False, "msg": "ya procesando"})
 
-    base = _session_dir(sid)
+    base     = _session_dir(sid)
+    log_path = base / "progress.log"
+    # Limpiar log anterior
+    log_path.write_text("", encoding="utf-8")
+
     cmd  = [sys.executable, str(AGENTE_PY), str(base)]
+    log_fh = open(log_path, "w", encoding="utf-8", buffering=1)
     proc = subprocess.Popen(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stdout=log_fh,
+        stderr=log_fh,
         text=True,
         encoding="utf-8",
         errors="replace",
-        bufsize=1,
     )
+    # Cerrar el file handle del padre cuando termine el proceso
+    def _cleanup(p, fh):
+        p.wait()
+        fh.close()
+    threading.Thread(target=_cleanup, args=(proc, log_fh), daemon=True).start()
+
     with _procs_lock:
         _procs[sid] = proc
     return jsonify({"ok": True})
 
 
+@app.route("/estado_proceso")
+def estado_proceso():
+    """Devuelve si hay un proceso activo y el log hasta ahora."""
+    sid = _sid_from_request()
+    if not _check_sid(sid):
+        return jsonify({"activo": False})
+    base     = _session_dir(sid)
+    log_path = base / "progress.log"
+    with _procs_lock:
+        proc = _procs.get(sid)
+    activo = proc is not None and proc.poll() is None
+    log    = ""
+    if log_path.exists():
+        try:
+            log = log_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            log = ""
+    terminado = not activo and log_path.exists() and len(log) > 0
+    return jsonify({"activo": activo, "terminado": terminado, "log": log})
+
+
 @app.route("/progreso")
 def progreso():
-    """SSE stream: envía líneas de stdout del subprocess."""
+    """SSE: lee progress.log y transmite líneas nuevas. Funciona aunque el
+    navegador se haya desconectado y vuelto a conectar."""
     sid = _sid_from_request()
     if not _check_sid(sid):
         return Response("", status=400)
 
+    base     = _session_dir(sid)
+    log_path = base / "progress.log"
+
     def _generar():
-        # Esperar hasta que haya proceso (máx 5 s)
-        for _ in range(50):
-            with _procs_lock:
-                proc = _procs.get(sid)
-            if proc:
+        # Esperar hasta que exista el log (máx 8 s)
+        for _ in range(80):
+            if log_path.exists():
                 break
             time.sleep(0.1)
         else:
             yield "data: ERROR:No se encontro proceso activo\n\n"
             return
 
-        # Leer stdout línea a línea
-        for linea in proc.stdout:
-            linea = linea.rstrip()
-            if linea:
-                yield f"data: {linea}\n\n"
+        offset = 0
+        done   = False
+        while not done:
+            try:
+                content = log_path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                content = ""
 
-        proc.wait()
+            nuevas = content[offset:]
+            offset = len(content)
+
+            for linea in nuevas.splitlines():
+                linea = linea.strip()
+                if not linea:
+                    continue
+                yield f"data: {linea}\n\n"
+                if linea.startswith("RESULTADO:") or linea.startswith("ERROR:"):
+                    done = True
+
+            # Verificar si el proceso terminó
+            with _procs_lock:
+                proc = _procs.get(sid)
+            if proc is not None and proc.poll() is not None and not nuevas:
+                done = True
+
+            if not done:
+                time.sleep(0.4)
+
         yield "data: DONE\n\n"
 
     return Response(
         stream_with_context(_generar()),
         mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # desactivar buffer en Nginx/Render
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

@@ -421,7 +421,8 @@ def leer_estado_cuenta(base_dir: Path) -> list:
             n_pages = len(doc)
 
             # Detectar año y formato en primera página
-            primera = doc[0].get_text() if n_pages > 0 else ""
+            # sort=True mantiene orden de lectura (izq→der, arriba→abajo)
+            primera = doc[0].get_text("text", sort=True) if n_pages > 0 else ""
             m_año = re.search(r"(20\d{2})", primera)
             if m_año:
                 año_default = int(m_año.group(1))
@@ -430,8 +431,8 @@ def leer_estado_cuenta(base_dir: Path) -> list:
             for i, page in enumerate(doc):
                 pct = 10 + int((i + 1) / max(n_pages, 1) * 80)
                 progreso("estado_cuenta", pct,
-                         f"{pdf_path.name} pág {i+1}/{n_pages}")
-                texto = page.get_text() or ""
+                         f"{pdf_path.name} pag {i+1}/{n_pages}")
+                texto = page.get_text("text", sort=True) or ""
                 if not texto.strip():
                     continue
                 if not re.search(r"\d{1,2}/[A-Za-z]{3}|\d{1,2}/\d{1,2}/\d{2,4}", texto):
