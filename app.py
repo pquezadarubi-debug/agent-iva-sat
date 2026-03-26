@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 app.py — AgentIVA Devoluciones SAT — versión web (Flask)
-Cualquier persona con la URL puede subir sus archivos y procesar su IVA.
-Sesiones aisladas por UUID, archivos temporales borrados tras 2 horas.
+Sistema con login: cada usuario tiene su propio espacio de trabajo persistente.
 """
 
 import os
@@ -14,14 +13,18 @@ import threading
 import time
 import datetime
 import subprocess
+import functools
+import re
 from pathlib import Path
 
 from flask import (Flask, request, Response, send_file,
-                   jsonify, make_response, stream_with_context)
+                   jsonify, make_response, stream_with_context,
+                   session, redirect)
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32))
+app.secret_key = os.environ.get("SECRET_KEY", "agentiva-secret-2026-cambiar-en-prod")
 
 # ─── Directorio de sesiones ────────────────────────────────────────────────
 # En Render /tmp es efímero pero suficiente para procesamiento
@@ -35,51 +38,201 @@ AGENTE_PY = Path(__file__).parent / "agente_iva.py"
 _procs: dict[str, subprocess.Popen] = {}
 _procs_lock = threading.Lock()
 
+# ─── Archivo de usuarios ───────────────────────────────────────────────────
+USERS_FILE = SESSIONS_DIR / "users.json"
+
+
+def _load_users() -> dict:
+    if USERS_FILE.exists():
+        try:
+            return json.loads(USERS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_users(users: dict):
+    USERS_FILE.write_text(json.dumps(users, ensure_ascii=False, indent=2),
+                          encoding="utf-8")
+
+
+def requires_login(f):
+    """Decorador: redirige a /login si no hay sesión activa."""
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("username"):
+            return redirect("/login")
+        return f(*args, **kwargs)
+    return decorated
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # Helpers de sesión
 # ══════════════════════════════════════════════════════════════════════════
-
-def _sid() -> str:
-    """Lee o crea el ID de sesión desde la cookie."""
-    sid = request.cookies.get("sid", "")
-    if not sid or len(sid) != 36:
-        sid = str(uuid.uuid4())
-    return sid
-
-
-def _set_sid(response: Response, sid: str) -> Response:
-    response.set_cookie("sid", sid, max_age=7 * 24 * 3600, samesite="Lax")
-    return response
-
 
 def _session_dir(sid: str) -> Path:
     d = SESSIONS_DIR / sid
     for sub in ["input/cfdi_cobro", "input/cfdi_pago", "input/aux_cobrado",
                 "input/aux_pagado", "input/pdf_bancos", "input/aux_bancos",
                 "input/machote", "output",
-                # legacy folders for backwards compat
                 "input/cfdi", "input/estado_cuenta", "input/auxiliar"]:
         (d / sub).mkdir(parents=True, exist_ok=True)
     return d
 
 
+def _get_sid() -> str:
+    """Devuelve el SID: para usuarios logueados = 'u_username', anónimo = UUID cookie."""
+    username = session.get("username")
+    if username:
+        return f"u_{username}"
+    sid = request.headers.get("X-Sid") or request.args.get("sid") or \
+          request.cookies.get("sid", "")
+    if not sid or len(sid) < 10:
+        sid = str(uuid.uuid4())
+    return sid
+
+
 def _limpiar_sesiones_antiguas():
-    """Borra sesiones con más de 2 horas de antigüedad."""
+    """Borra sesiones anónimas con más de 2 horas. Usuarios: 30 días."""
     while True:
-        time.sleep(1800)  # cada 30 minutos
+        time.sleep(1800)
         ahora = time.time()
         if not SESSIONS_DIR.exists():
             continue
         for d in SESSIONS_DIR.iterdir():
             try:
-                if d.is_dir() and (ahora - d.stat().st_mtime) > 7200:
-                    shutil.rmtree(d, ignore_errors=True)
+                if not d.is_dir():
+                    continue
+                nombre = d.name
+                if nombre.startswith("u_"):
+                    # Sesión de usuario: limpiar tras 30 días sin uso
+                    if (ahora - d.stat().st_mtime) > 30 * 86400:
+                        shutil.rmtree(d, ignore_errors=True)
+                elif len(nombre) == 36:
+                    # Sesión anónima: limpiar tras 2 horas
+                    if (ahora - d.stat().st_mtime) > 7200:
+                        shutil.rmtree(d, ignore_errors=True)
             except Exception:
                 pass
 
 
 threading.Thread(target=_limpiar_sesiones_antiguas, daemon=True).start()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Página de Login / Registro
+# ══════════════════════════════════════════════════════════════════════════
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agente IVA &mdash; Acceso</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Arial,sans-serif;background:#1F4E79;
+     display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#fff;border-radius:10px;padding:36px 40px;width:360px;
+      box-shadow:0 8px 32px rgba(0,0,0,.3)}
+.logo{font-size:28px;text-align:center;margin-bottom:4px}
+.titulo{font-size:18px;font-weight:700;color:#1F4E79;text-align:center;margin-bottom:4px}
+.sub{font-size:12px;color:#888;text-align:center;margin-bottom:28px}
+.tabs{display:flex;gap:0;margin-bottom:24px;border-bottom:2px solid #e0e0e0}
+.ltab{flex:1;padding:8px;text-align:center;cursor:pointer;font-size:13px;
+      font-weight:600;color:#888;border-bottom:3px solid transparent;margin-bottom:-2px}
+.ltab.active{color:#1F4E79;border-bottom-color:#1F4E79}
+.panel{display:none}.panel.active{display:block}
+.fld{margin-bottom:14px}
+.fld label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:4px}
+.fld input{width:100%;border:1px solid #ddd;border-radius:5px;padding:9px 12px;
+           font-size:13px;font-family:inherit;outline:none}
+.fld input:focus{border-color:#2E75B6}
+.btn{width:100%;background:#1F4E79;color:#fff;border:none;border-radius:5px;
+     padding:11px;font-size:14px;font-weight:700;cursor:pointer;margin-top:6px}
+.btn:hover{background:#2E75B6}
+.msg{font-size:12px;padding:8px 12px;border-radius:4px;margin-top:10px;display:none}
+.msg.err{background:#FCE4D6;color:#C00000;display:block}
+.msg.ok{background:#E2EFDA;color:#375623;display:block}
+.nota{font-size:10px;color:#aaa;text-align:center;margin-top:16px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">&#128202;</div>
+  <div class="titulo">Agente IVA</div>
+  <div class="sub">Devoluciones SAT &mdash; M&eacute;xico</div>
+  <div class="tabs">
+    <div class="ltab active" id="tab-login" onclick="showTab('login')">Iniciar sesi&oacute;n</div>
+    <div class="ltab" id="tab-reg" onclick="showTab('reg')">Crear cuenta</div>
+  </div>
+
+  <!-- LOGIN -->
+  <div class="panel active" id="panel-login">
+    <form onsubmit="doLogin(event)">
+      <div class="fld"><label>Usuario</label>
+        <input id="l-user" autocomplete="username" placeholder="tu_usuario" required></div>
+      <div class="fld"><label>Contrase&ntilde;a</label>
+        <input id="l-pass" type="password" autocomplete="current-password" required></div>
+      <button class="btn" type="submit">Entrar</button>
+      <div class="msg" id="l-msg"></div>
+    </form>
+  </div>
+
+  <!-- REGISTRO -->
+  <div class="panel" id="panel-reg">
+    <form onsubmit="doReg(event)">
+      <div class="fld"><label>Usuario (sin espacios)</label>
+        <input id="r-user" placeholder="mi_empresa" pattern="[a-zA-Z0-9_\\-]+" required></div>
+      <div class="fld"><label>Contrase&ntilde;a</label>
+        <input id="r-pass" type="password" minlength="6" required></div>
+      <div class="fld"><label>Confirmar contrase&ntilde;a</label>
+        <input id="r-pass2" type="password" required></div>
+      <button class="btn" type="submit">Crear cuenta</button>
+      <div class="msg" id="r-msg"></div>
+    </form>
+  </div>
+
+  <div class="nota">Tus archivos se guardan en tu cuenta.<br>
+    En el plan gratuito se pierden si el servidor reinicia.</div>
+</div>
+<script>
+function showTab(t){
+  ['login','reg'].forEach(x=>{
+    document.getElementById('panel-'+x).classList.toggle('active',x===t);
+    document.getElementById('tab-'+x).classList.toggle('active',x===t);
+  });
+}
+async function doLogin(e){
+  e.preventDefault();
+  const r=await fetch('/login',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({username:document.getElementById('l-user').value,
+                         password:document.getElementById('l-pass').value})});
+  const d=await r.json();
+  const m=document.getElementById('l-msg');
+  if(d.ok){m.className='msg ok';m.textContent='Acceso correcto, redirigiendo...';
+            setTimeout(()=>location.href='/',800);}
+  else{m.className='msg err';m.textContent=d.error||'Error al iniciar sesion';}
+}
+async function doReg(e){
+  e.preventDefault();
+  const p=document.getElementById('r-pass').value;
+  const p2=document.getElementById('r-pass2').value;
+  const m=document.getElementById('r-msg');
+  if(p!==p2){m.className='msg err';m.textContent='Las contrasenas no coinciden';return;}
+  const r=await fetch('/register',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({username:document.getElementById('r-user').value,password:p})});
+  const d=await r.json();
+  if(d.ok){m.className='msg ok';m.textContent='Cuenta creada, entrando...';
+            setTimeout(()=>location.href='/',800);}
+  else{m.className='msg err';m.textContent=d.error||'Error al crear cuenta';}
+}
+</script>
+</body>
+</html>
+"""
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -213,7 +366,11 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     <div class="logo">&#128202; Agente IVA</div>
     <div class="sub">Devoluciones SAT &mdash; Mexico</div>
   </div>
-  <div class="badge-pub">&#127760; Uso publico &mdash; archivos se borran en 2 h</div>
+  <div class="badge-pub" style="display:flex;align-items:center;gap:12px">
+    <span>&#128100; {{USERNAME}}</span>
+    <a href="/logout" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">
+      Cerrar sesi&oacute;n</a>
+  </div>
 </header>
 <div class="tabs">
   <div class="tab active" onclick="showTab('archivos')"    id="tab-archivos">&#128193; Archivos</div>
@@ -668,7 +825,10 @@ actualizarEstado();
 # ══════════════════════════════════════════════════════════════════════════
 
 def _sid_from_request() -> str:
-    """Lee X-Sid header o cookie."""
+    """SID: para usuarios logueados = u_username; anónimo = UUID header/cookie."""
+    username = session.get("username")
+    if username:
+        return f"u_{username}"
     sid = request.headers.get("X-Sid") or request.args.get("sid") or \
           request.cookies.get("sid", "")
     if not sid or len(sid) < 10:
@@ -677,9 +837,9 @@ def _sid_from_request() -> str:
 
 
 def _check_sid(sid: str) -> bool:
-    """Valida que el SID solo contenga caracteres de UUID."""
-    import re
-    return bool(re.match(r'^[0-9a-f\-]{36}$', sid))
+    """Valida SID: UUID anónimo o u_username de usuario logueado."""
+    return bool(re.match(r'^[0-9a-f\-]{36}$', sid)) or \
+           bool(re.match(r'^u_[a-zA-Z0-9_\-]{1,50}$', sid))
 
 
 ALLOWED_EXT = {
@@ -704,16 +864,73 @@ OUTPUT_MAP = {
 # Rutas
 # ══════════════════════════════════════════════════════════════════════════
 
+@app.route("/login", methods=["GET"])
+def login_page():
+    if session.get("username"):
+        return redirect("/")
+    return make_response(LOGIN_HTML)
+
+
+@app.route("/login", methods=["POST"])
+def login_post():
+    datos = request.get_json(force=True, silent=True) or {}
+    username = datos.get("username", "").strip().lower()
+    password = datos.get("password", "")
+    if not username or not password:
+        return jsonify({"ok": False, "error": "Usuario y contraseña requeridos"})
+    users = _load_users()
+    if username not in users:
+        return jsonify({"ok": False, "error": "Usuario no encontrado"})
+    if not check_password_hash(users[username]["password_hash"], password):
+        return jsonify({"ok": False, "error": "Contraseña incorrecta"})
+    session["username"] = username
+    session.permanent = True
+    app.permanent_session_lifetime = datetime.timedelta(days=30)
+    return jsonify({"ok": True})
+
+
+@app.route("/register", methods=["POST"])
+def register_post():
+    datos = request.get_json(force=True, silent=True) or {}
+    username = datos.get("username", "").strip().lower()
+    password = datos.get("password", "")
+    if not re.match(r'^[a-zA-Z0-9_\-]{2,50}$', username):
+        return jsonify({"ok": False, "error": "Usuario inválido (solo letras, números, _ y -)"})
+    if len(password) < 6:
+        return jsonify({"ok": False, "error": "Contraseña mínimo 6 caracteres"})
+    users = _load_users()
+    if username in users:
+        return jsonify({"ok": False, "error": "Ese usuario ya existe"})
+    users[username] = {
+        "password_hash": generate_password_hash(password),
+        "created": datetime.datetime.now().isoformat()
+    }
+    _save_users(users)
+    session["username"] = username
+    session.permanent = True
+    app.permanent_session_lifetime = datetime.timedelta(days=30)
+    return jsonify({"ok": True})
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+
 @app.route("/")
+@requires_login
 def index():
+    username = session.get("username", "")
     sid = _sid_from_request()
-    _session_dir(sid)       # asegurar estructura de carpetas
-    resp = make_response(HTML)
-    resp.set_cookie("sid", sid, max_age=7 * 24 * 3600, samesite="Lax")
+    _session_dir(sid)
+    html = HTML.replace("{{USERNAME}}", username)
+    resp = make_response(html)
     return resp
 
 
 @app.route("/upload", methods=["POST"])
+@requires_login
 def upload():
     sid  = _sid_from_request()
     if not _check_sid(sid):
@@ -744,6 +961,7 @@ def upload():
 
 
 @app.route("/config", methods=["POST"])
+@requires_login
 def guardar_config():
     sid = _sid_from_request()
     if not _check_sid(sid):
@@ -756,6 +974,7 @@ def guardar_config():
 
 
 @app.route("/estado")
+@requires_login
 def estado():
     sid = _sid_from_request()
     if not _check_sid(sid):
@@ -776,9 +995,10 @@ def estado():
 
 
 @app.route("/procesar", methods=["POST"])
+@requires_login
 def procesar():
     """Lanza agente en background; el progreso se lee con /progreso (SSE)."""
-    sid = request.headers.get("X-Sid") or request.cookies.get("sid", "")
+    sid = _sid_from_request()
     if not _check_sid(sid):
         return jsonify({"ok": False}), 400
 
@@ -803,9 +1023,10 @@ def procesar():
 
 
 @app.route("/progreso")
+@requires_login
 def progreso():
     """SSE stream: envía líneas de stdout del subprocess."""
-    sid = request.args.get("sid", "")
+    sid = _sid_from_request()
     if not _check_sid(sid):
         return Response("", status=400)
 
@@ -841,6 +1062,7 @@ def progreso():
 
 
 @app.route("/archivos_output")
+@requires_login
 def archivos_output():
     sid = _sid_from_request()
     if not _check_sid(sid):
@@ -855,6 +1077,7 @@ def archivos_output():
 
 
 @app.route("/download/<tipo>")
+@requires_login
 def download(tipo: str):
     sid = _sid_from_request()
     if not _check_sid(sid) or tipo not in OUTPUT_MAP:
@@ -867,6 +1090,7 @@ def download(tipo: str):
 
 
 @app.route("/limpiar_zona", methods=["POST"])
+@requires_login
 def limpiar_zona():
     sid = _sid_from_request()
     if not _check_sid(sid):
@@ -895,6 +1119,7 @@ def limpiar_zona():
 
 
 @app.route("/limpiar", methods=["POST"])
+@requires_login
 def limpiar():
     sid = _sid_from_request()
     if not _check_sid(sid):
