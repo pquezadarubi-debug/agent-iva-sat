@@ -414,38 +414,37 @@ def leer_estado_cuenta(base_dir: Path) -> list:
     año_default = datetime.datetime.now().year
 
     for pdf_path in pdfs:
+        progreso("estado_cuenta", 10, f"Leyendo {pdf_path.name}...")
         try:
-            with pdfplumber.open(pdf_path) as pdf:
-                # Intentar detectar año del periodo en primera página
-                primera = pdf.pages[0].extract_text() or ""
-                m_año = re.search(r"(20\d{2})", primera)
-                if m_año:
-                    año_default = int(m_año.group(1))
+            # Usar fitz (pymupdf) — 10-50x más rápido que pdfplumber
+            doc = fitz.open(str(pdf_path))
+            n_pages = len(doc)
 
-                # Detectar si es BBVA (tiene el patrón DD/ENE DD/ENE)
-                es_bbva = bool(re.search(r"\d{1,2}/[A-Z]{3}\s+\d{1,2}/[A-Z]{3}",
-                                          primera))
+            # Detectar año y formato en primera página
+            primera = doc[0].get_text() if n_pages > 0 else ""
+            m_año = re.search(r"(20\d{2})", primera)
+            if m_año:
+                año_default = int(m_año.group(1))
+            es_bbva = bool(re.search(r"\d{1,2}/[A-Z]{3}\s+\d{1,2}/[A-Z]{3}", primera))
 
-                for page in pdf.pages:
-                    texto = page.extract_text() or ""
-                    if not texto.strip():
-                        continue
+            for i, page in enumerate(doc):
+                pct = 10 + int((i + 1) / max(n_pages, 1) * 80)
+                progreso("estado_cuenta", pct,
+                         f"{pdf_path.name} pág {i+1}/{n_pages}")
+                texto = page.get_text() or ""
+                if not texto.strip():
+                    continue
+                if not re.search(r"\d{1,2}/[A-Za-z]{3}|\d{1,2}/\d{1,2}/\d{2,4}", texto):
+                    continue
+                lineas = [l for l in texto.split("\n") if l.strip()]
+                if es_bbva or re.search(r"\d{1,2}/[A-Z]{3}\s+\d{1,2}/[A-Z]{3}", texto):
+                    movs_pagina = _parsear_bloque_bbva(lineas, año_default)
+                else:
+                    movs_pagina = _parsear_texto_generico(texto, año_default)
+                movimientos.extend(movs_pagina)
 
-                    # Verificar si esta página tiene movimientos
-                    if not re.search(r"\d{1,2}/[A-Za-z]{3}|\d{1,2}/\d{1,2}/\d{2,4}", texto):
-                        continue
+            doc.close()
 
-                    lineas = [l for l in texto.split("\n") if l.strip()]
-
-                    if es_bbva or re.search(r"\d{1,2}/[A-Z]{3}\s+\d{1,2}/[A-Z]{3}", texto):
-                        movs_pagina = _parsear_bloque_bbva(lineas, año_default)
-                    else:
-                        movs_pagina = _parsear_texto_generico(texto, año_default)
-
-                    movimientos.extend(movs_pagina)
-
-        except Exception as e:
-            print(f"ADVERTENCIA: No se pudo leer {pdf_path.name}: {e}", flush=True)
         except Exception as e:
             print(f"ADVERTENCIA: No se pudo leer {pdf_path.name}: {e}", flush=True)
 
