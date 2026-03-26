@@ -367,9 +367,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     <div class="sub">Devoluciones SAT &mdash; Mexico</div>
   </div>
   <div class="badge-pub" style="display:flex;align-items:center;gap:12px">
-    <span>&#128100; {{USERNAME}}</span>
-    <a href="/logout" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">
-      Cerrar sesi&oacute;n</a>
+    {{USER_BADGE}}
   </div>
 </header>
 <div class="tabs">
@@ -871,6 +869,12 @@ def login_page():
     return make_response(LOGIN_HTML)
 
 
+@app.route("/login_opcional")
+def login_opcional():
+    """Redirige a login pero con opción de volver."""
+    return redirect("/login")
+
+
 @app.route("/login", methods=["POST"])
 def login_post():
     datos = request.get_json(force=True, silent=True) or {}
@@ -919,18 +923,27 @@ def logout():
 
 
 @app.route("/")
-@requires_login
 def index():
     username = session.get("username", "")
     sid = _sid_from_request()
     _session_dir(sid)
-    html = HTML.replace("{{USERNAME}}", username)
+    if username:
+        badge = (f'<span>&#128100; {username}</span>'
+                 f'<a href="/logout" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">'
+                 f'Cerrar sesi&oacute;n</a>')
+    else:
+        badge = ('<span style="font-size:11px;opacity:.8">Sesion temporal &mdash; archivos se borran al cerrar</span>'
+                 '<a href="/login" style="color:#fff;font-size:11px;font-weight:600;text-decoration:none;'
+                 'background:rgba(255,255,255,.2);padding:3px 10px;border-radius:10px">'
+                 '&#128274; Iniciar sesi&oacute;n / Crear cuenta</a>')
+    html = HTML.replace("{{USER_BADGE}}", badge)
     resp = make_response(html)
+    if not username:
+        resp.set_cookie("sid", sid, max_age=7 * 24 * 3600, samesite="Lax")
     return resp
 
 
 @app.route("/upload", methods=["POST"])
-@requires_login
 def upload():
     sid  = _sid_from_request()
     if not _check_sid(sid):
@@ -961,7 +974,6 @@ def upload():
 
 
 @app.route("/config", methods=["POST"])
-@requires_login
 def guardar_config():
     sid = _sid_from_request()
     if not _check_sid(sid):
@@ -974,7 +986,6 @@ def guardar_config():
 
 
 @app.route("/estado")
-@requires_login
 def estado():
     sid = _sid_from_request()
     if not _check_sid(sid):
@@ -995,7 +1006,6 @@ def estado():
 
 
 @app.route("/procesar", methods=["POST"])
-@requires_login
 def procesar():
     """Lanza agente en background; el progreso se lee con /progreso (SSE)."""
     sid = _sid_from_request()
@@ -1023,7 +1033,6 @@ def procesar():
 
 
 @app.route("/progreso")
-@requires_login
 def progreso():
     """SSE stream: envía líneas de stdout del subprocess."""
     sid = _sid_from_request()
@@ -1062,7 +1071,6 @@ def progreso():
 
 
 @app.route("/archivos_output")
-@requires_login
 def archivos_output():
     sid = _sid_from_request()
     if not _check_sid(sid):
@@ -1077,7 +1085,6 @@ def archivos_output():
 
 
 @app.route("/download/<tipo>")
-@requires_login
 def download(tipo: str):
     sid = _sid_from_request()
     if not _check_sid(sid) or tipo not in OUTPUT_MAP:
@@ -1090,7 +1097,6 @@ def download(tipo: str):
 
 
 @app.route("/limpiar_zona", methods=["POST"])
-@requires_login
 def limpiar_zona():
     sid = _sid_from_request()
     if not _check_sid(sid):
@@ -1119,7 +1125,6 @@ def limpiar_zona():
 
 
 @app.route("/limpiar", methods=["POST"])
-@requires_login
 def limpiar():
     sid = _sid_from_request()
     if not _check_sid(sid):
