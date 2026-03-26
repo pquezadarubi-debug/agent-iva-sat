@@ -296,7 +296,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
   </div>
 
   <div class="btn-row">
-    <button class="btn big" id="btn-proc" onclick="iniciar()">&#9654; PROCESAR AHORA</button>
+    <button class="btn big" id="btn-proc" onclick="iniciar()">&#x25BA; PROCESAR AHORA</button>
     <span id="proc-msg" style="font-size:11px;color:#888"></span>
   </div>
 </div>
@@ -323,7 +323,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
 <!-- TAB 3 RESULTADOS -->
 <div class="panel" id="panel-resultados">
   <div class="mgrid">
-    <div class="mc v"><div class="mv" id="m-iva">$0.00</div><div class="ml">IVA acreditable confirmado</div></div>
+    <div class="mc v"><div class="mv" id="m-iva">$0.00</div><div class="ml">SALDO A FAVOR A SOLICITAR</div></div>
     <div class="mc v"><div class="mv" id="m-cru">0 / 0</div><div class="ml">CFDIs con cruce completo</div></div>
     <div class="mc a"><div class="mv" id="m-par">0</div><div class="ml">Cruce parcial &mdash; revisar</div></div>
     <div class="mc r"><div class="mv" id="m-sin">0</div><div class="ml">Sin cruce &mdash; accion requerida</div></div>
@@ -513,7 +513,7 @@ function iniciar(){
       log(linea.substring(6),'err');
       sse.close(); sse=null;
       document.getElementById('btn-proc').disabled=false;
-      document.getElementById('btn-proc').textContent='&#9654; PROCESAR AHORA';
+      document.getElementById('btn-proc').innerHTML='&#x25BA; PROCESAR AHORA';
     } else if(linea.startsWith('DONE')){
       sse.close(); sse=null;
     } else if(linea.trim()){
@@ -528,7 +528,7 @@ function iniciar(){
 function finProceso(d){
   if(sse){sse.close();sse=null;}
   document.getElementById('btn-proc').disabled=false;
-  document.getElementById('btn-proc').textContent='&#9654; PROCESAR AHORA';
+  document.getElementById('btn-proc').innerHTML='&#x25BA; PROCESAR AHORA';
   const total=parseInt(d.total)||0, iva=parseFloat(d.iva)||0;
   const ok=parseInt(d.cruces)||0, sinc=parseInt(d.sin_cruce)||0;
   const parc=Math.max(0,total-ok-sinc);
@@ -539,7 +539,7 @@ function finProceso(d){
   if(sinc>0) document.getElementById('al-sin').classList.remove('hidden');
   document.getElementById('resumen').innerHTML=
     '<b>CFDIs:</b> '+total+' &nbsp;|&nbsp; '+
-    '<b>IVA acreditable:</b> $'+iva.toLocaleString('es-MX',{minimumFractionDigits:2})+
+    '<b>Saldo a favor a solicitar:</b> $'+iva.toLocaleString('es-MX',{minimumFractionDigits:2})+
     ' &nbsp;|&nbsp; <b>Cruce completo:</b> '+ok+
     ' &nbsp;|&nbsp; <b>Parcial:</b> '+parc+
     ' &nbsp;|&nbsp; <b>Sin cruce:</b> '+sinc;
