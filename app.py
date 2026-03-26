@@ -84,6 +84,17 @@ def _session_dir(sid: str) -> Path:
     return d
 
 
+def _cargar_api_keys(base_dir: Path) -> dict:
+    """Lee las claves de API guardadas por el usuario en la sesión."""
+    p = base_dir / "input" / "api_keys.json"
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
 def _get_sid() -> str:
     """Devuelve el SID: para usuarios logueados = 'u_username', anónimo = UUID cookie."""
     username = session.get("username")
@@ -353,6 +364,23 @@ header{background:var(--az);color:#fff;padding:10px 20px;
      background:#f0f0f0;color:#666}
 .est.ok{background:var(--vbg);color:var(--vfg)}
 .hidden{display:none!important}
+/* API Keys section */
+.api-keys-section{background:#FFF9E6;border:1px solid #FFE082;border-radius:6px;
+  padding:12px 14px;margin-top:12px}
+.api-keys-title{font-size:11px;font-weight:600;color:#7F6000;text-transform:uppercase;
+  letter-spacing:.4px;margin-bottom:8px}
+/* Chat IA */
+.chat-box{background:#f8f9fa;border:1px solid var(--borde);border-radius:6px;
+  height:320px;overflow-y:auto;padding:10px;margin-bottom:10px;
+  display:flex;flex-direction:column;gap:8px}
+.chat-msg{max-width:82%;border-radius:8px;padding:8px 12px;font-size:12px;line-height:1.6}
+.chat-msg.user{background:#1F4E79;color:#fff;align-self:flex-end}
+.chat-msg.ai{background:#fff;border:1px solid #ddd;align-self:flex-start;white-space:pre-wrap}
+.chat-msg.sys{background:#f0f0f0;color:#888;align-self:center;font-size:11px;font-style:italic;max-width:100%}
+.chat-input-row{display:flex;gap:8px}
+.chat-input-row input{flex:1;border:1px solid var(--borde);border-radius:4px;
+  padding:8px 10px;font-size:12px;font-family:inherit}
+.chat-input-row input:focus{outline:none;border-color:var(--azb)}
 /* SAT download */
 .sat-fiel-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
 .sat-fiel-zone{border:2px dashed var(--borde);border-radius:6px;padding:14px;
@@ -390,6 +418,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
   <div class="tab"        onclick="showTab('procesando')"  id="tab-procesando">&#9881;&#65039; Procesando</div>
   <div class="tab"        onclick="showTab('resultados')"  id="tab-resultados">&#128200; Resultados</div>
   <div class="tab"        onclick="showTab('entregables')" id="tab-entregables">&#128230; Entregables</div>
+  <div class="tab"        onclick="showTab('chat')"        id="tab-chat">&#129302; Chat IA</div>
 </div>
 <div class="content">
 
@@ -525,6 +554,23 @@ header{background:var(--az);color:#fff;padding:10px 20px;
       <button class="btn sec" onclick="guardarConfig()">&#128190; Guardar datos</button>
       <span id="cfg-saved" class="hidden" style="color:var(--vfg);font-size:12px">&#10003; Guardado</span>
     </div>
+    <div class="api-keys-section">
+      <div class="api-keys-title">&#128272; Claves IA &mdash; An&aacute;lisis de Riesgos y Chat (opcional)</div>
+      <p style="font-size:11px;color:#7F6000;margin-bottom:8px">
+        Necesarias para generar el reporte de riesgos y usar el Chat IA.
+        Se guardan solo en tu sesi&oacute;n, no se env&iacute;an a ning&uacute;n tercero.
+      </p>
+      <div class="cfg-form">
+        <div class="fld"><label>Anthropic API Key (Claude)</label>
+          <input type="password" id="c-anthropic-key" placeholder="sk-ant-api03-..."></div>
+        <div class="fld"><label>Google AI API Key (Gemini)</label>
+          <input type="password" id="c-gemini-key" placeholder="AIzaSy..."></div>
+      </div>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn sec" onclick="guardarApiKeys()">&#128190; Guardar claves IA</button>
+        <span id="apikeys-saved" class="hidden" style="color:var(--vfg);font-size:12px">&#10003; Guardado</span>
+      </div>
+    </div>
   </div>
 
   <div class="btn-row">
@@ -621,7 +667,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     </div>
     <div class="er">
       <span class="eico">&#128680;</span>
-      <span class="enm" id="en-riesgos">reporte_riesgos_YYYYMM.xlsx <span style="font-size:10px;color:#888">(requiere ANTHROPIC_API_KEY o GEMINI_API_KEY)</span></span>
+      <span class="enm" id="en-riesgos">reporte_riesgos_YYYYMM.xlsx</span>
       <span class="est" id="es-riesgos">Pendiente</span>
       <a class="btn sec" id="dl-riesgos" href="/download/riesgos" style="padding:4px 12px;font-size:11px;text-decoration:none">&#8659; Descargar</a>
     </div>
@@ -700,6 +746,29 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     <div class="sat-log" id="sat-logbox"></div>
   </div>
 
+</div>
+
+<!-- TAB CHAT IA -->
+<div class="panel" id="panel-chat">
+  <div class="card">
+    <div class="ctitle">&#129302; Chat IA &mdash; Agente IVA SAT</div>
+    <p style="font-size:11px;color:#666;margin-bottom:12px">
+      Haz preguntas sobre tu informaci&oacute;n procesada, criterios SAT, Ley del IVA,
+      jurisprudencias TFJFA o riesgos de tu solicitud de devoluci&oacute;n.
+      Requiere clave API de Anthropic (Claude) o Google (Gemini) &mdash;
+      conf&iacute;gurala en la pesta&ntilde;a <strong>Archivos</strong>.
+    </p>
+    <div class="chat-box" id="chat-box">
+      <div class="chat-msg sys">Bienvenido al Chat IA. Puedes preguntar sobre tus CFDIs procesados, el IVA en M&eacute;xico y los criterios SAT.</div>
+    </div>
+    <div class="chat-input-row">
+      <input type="text" id="chat-input"
+             placeholder="Ej: &iquest;Qu&eacute; proveedores tienen mayor riesgo de rechazo?"
+             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();enviarChat();}">
+      <button class="btn" onclick="enviarChat()" id="btn-chat-send">Enviar</button>
+    </div>
+    <div id="chat-error" style="font-size:11px;color:#C00000;margin-top:6px"></div>
+  </div>
 </div>
 
 </div><!-- .content -->
@@ -1033,6 +1102,64 @@ function satLogMsg(msg, cls){
   box.appendChild(el);
   box.scrollTop = box.scrollHeight;
 }
+
+// ─── Guardar claves API ───────────────────────────────────────────────────
+async function guardarApiKeys(){
+  const keys = {
+    anthropic_key: document.getElementById('c-anthropic-key').value.trim(),
+    gemini_key:    document.getElementById('c-gemini-key').value.trim(),
+  };
+  await fetch('/api_keys',{method:'POST',
+    headers:{'Content-Type':'application/json','X-Sid':SID},
+    body:JSON.stringify(keys)});
+  const s = document.getElementById('apikeys-saved');
+  s.classList.remove('hidden');
+  setTimeout(()=>s.classList.add('hidden'), 3000);
+}
+
+// ─── Chat IA ───────────────────────────────────────────────────────────────
+async function enviarChat(){
+  const inp = document.getElementById('chat-input');
+  const msg = inp.value.trim();
+  if(!msg) return;
+  const btn = document.getElementById('btn-chat-send');
+  if(btn.disabled) return;
+  btn.disabled = true;
+  inp.value = '';
+  document.getElementById('chat-error').textContent = '';
+  chatAgregar(msg, 'user');
+  const typingId = 'chat-typing-'+Date.now();
+  chatAgregar('...', 'ai', typingId);
+  try {
+    const r = await fetch('/chat',{method:'POST',
+      headers:{'Content-Type':'application/json','X-Sid':SID},
+      body:JSON.stringify({message:msg})});
+    const d = await r.json();
+    const typing = document.getElementById(typingId);
+    if(typing) typing.remove();
+    if(d.ok){
+      chatAgregar(d.response, 'ai');
+    } else {
+      document.getElementById('chat-error').textContent = d.error || 'Error al obtener respuesta';
+    }
+  } catch(e){
+    const typing = document.getElementById(typingId);
+    if(typing) typing.remove();
+    document.getElementById('chat-error').textContent = 'Error de red: '+e;
+  }
+  btn.disabled = false;
+  inp.focus();
+}
+
+function chatAgregar(msg, rol, id){
+  const box = document.getElementById('chat-box');
+  const el = document.createElement('div');
+  el.className = 'chat-msg ' + rol;
+  el.textContent = msg;
+  if(id) el.id = id;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+}
 </script>
 </body>
 </html>
@@ -1220,6 +1347,147 @@ def guardar_config():
     with open(base / "input" / "config.json", "w", encoding="utf-8") as fh:
         json.dump(datos, fh, ensure_ascii=False, indent=2)
     return jsonify({"ok": True})
+
+
+@app.route("/api_keys", methods=["POST"])
+def guardar_api_keys():
+    sid = _sid_from_request()
+    if not _check_sid(sid):
+        return jsonify({"ok": False}), 400
+    base  = _session_dir(sid)
+    datos = request.get_json(force=True, silent=True) or {}
+    keys  = {}
+    for k in ("anthropic_key", "gemini_key"):
+        v = datos.get(k, "").strip()
+        if v:
+            keys[k] = v
+    (base / "input" / "api_keys.json").write_text(
+        json.dumps(keys, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return jsonify({"ok": True})
+
+
+def _build_chat_context(base_dir: Path) -> str:
+    """Construye contexto del sistema para el chat IA con los datos procesados."""
+    parts = [
+        "Eres el Agente IVA SAT, asistente experto en devoluciones de IVA en México.",
+        "Respondes preguntas sobre:",
+        "1. Los datos procesados de la empresa (CFDIs, cruces, auxiliares SAP)",
+        "2. Ley del IVA (LIVA), CFF y criterios normativos del SAT",
+        "3. Jurisprudencias y precedentes del TFJA (antes TFJFA) sobre devoluciones de IVA",
+        "4. Riesgos de rechazo de solicitudes de devolución de IVA acreditable",
+        "5. Requisitos formales: artículo 22 CFF, CURP/RFC, CLABE, representante legal",
+        "Responde siempre en español, de forma clara y precisa.",
+        "",
+    ]
+    cfg_path = base_dir / "input" / "config.json"
+    if cfg_path.exists():
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            parts.append(f"Empresa: {cfg.get('empresa','')}  RFC: {cfg.get('rfc','')}")
+            if cfg.get("periodo_str"):
+                parts.append(f"Periodo procesado: {cfg.get('periodo_str')}")
+        except Exception:
+            pass
+    log_path = base_dir / "progress.log"
+    if log_path.exists():
+        try:
+            log = log_path.read_text(encoding="utf-8", errors="replace")
+            for line in log.splitlines():
+                if line.startswith("RESULTADO:"):
+                    p = line.split(":")
+                    if len(p) >= 5:
+                        parts.append(
+                            f"Resultado proceso: total_cfdi={p[1]}, saldo_iva={p[2]}, "
+                            f"cruce_completo={p[3]}, sin_cruce={p[4]}, "
+                            f"iva_trasladado={p[5] if len(p)>5 else ''}, "
+                            f"iva_acreditable={p[6] if len(p)>6 else ''}"
+                        )
+                    break
+        except Exception:
+            pass
+    return "\n".join(parts)
+
+
+@app.route("/chat", methods=["POST"])
+def chat_ia():
+    sid = _sid_from_request()
+    if not _check_sid(sid):
+        return jsonify({"ok": False, "error": "sid invalido"}), 400
+
+    datos   = request.get_json(force=True, silent=True) or {}
+    mensaje = datos.get("message", "").strip()
+    if not mensaje:
+        return jsonify({"ok": False, "error": "Mensaje vacío"})
+    if len(mensaje) > 2000:
+        return jsonify({"ok": False, "error": "Mensaje demasiado largo (máx 2000 chars)"})
+
+    base     = _session_dir(sid)
+    api_keys = _cargar_api_keys(base)
+    anthropic_key = api_keys.get("anthropic_key") or os.environ.get("ANTHROPIC_API_KEY", "")
+    gemini_key    = api_keys.get("gemini_key")    or os.environ.get("GEMINI_API_KEY", "")
+
+    if not anthropic_key and not gemini_key:
+        return jsonify({"ok": False,
+                        "error": "Configura una clave API de Anthropic o Google en la sección "
+                                 "'Datos de empresa' → 'Claves IA' y guarda antes de chatear."})
+
+    # Historial de conversación (guardado por sesión)
+    history_path = base / "chat_history.json"
+    try:
+        history = json.loads(history_path.read_text(encoding="utf-8")) if history_path.exists() else []
+    except Exception:
+        history = []
+
+    system_ctx = _build_chat_context(base)
+    respuesta  = None
+
+    if anthropic_key:
+        try:
+            import anthropic as _anthropic
+            client   = _anthropic.Anthropic(api_key=anthropic_key)
+            messages = history[-10:] + [{"role": "user", "content": mensaje}]
+            resp     = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                system=system_ctx,
+                messages=messages,
+            )
+            respuesta = resp.content[0].text
+        except Exception as exc:
+            if not gemini_key:
+                return jsonify({"ok": False, "error": f"Error Claude API: {exc}"})
+
+    if respuesta is None and gemini_key:
+        try:
+            import google.generativeai as _genai
+            _genai.configure(api_key=gemini_key)
+            model = _genai.GenerativeModel("gemini-1.5-pro",
+                                           system_instruction=system_ctx)
+            gemini_hist = [
+                {"role": ("model" if m["role"] == "assistant" else "user"),
+                 "parts": [m["content"]]}
+                for m in history[-10:]
+            ]
+            chat_session = model.start_chat(history=gemini_hist)
+            resp = chat_session.send_message(mensaje)
+            respuesta = resp.text
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"Error Gemini API: {exc}"})
+
+    if respuesta is None:
+        return jsonify({"ok": False, "error": "No se pudo obtener respuesta"})
+
+    # Actualizar historial (máx 20 mensajes = 10 turnos)
+    history.append({"role": "user",      "content": mensaje})
+    history.append({"role": "assistant", "content": respuesta})
+    history = history[-20:]
+    try:
+        history_path.write_text(json.dumps(history, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+    return jsonify({"ok": True, "response": respuesta})
 
 
 @app.route("/estado")
@@ -1512,6 +1780,52 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
                 pass
             return ""
 
+        import base64 as _b64
+        import time as _time
+        from satcfdi.pacs.sat import EstadoSolicitud
+
+        def _request_and_download(req_fn, desc_log, **kwargs):
+            """Request → polling → download. Yields (meta, zip_bytes)."""
+            try:
+                resp = req_fn(**kwargs)
+            except Exception as exc:
+                _log(f"ADVERTENCIA {desc_log}: error en request: {exc}")
+                return
+            id_solicitud = resp.get('IdSolicitud') or resp.get('id_solicitud', '')
+            if not id_solicitud:
+                _log(f"ADVERTENCIA {desc_log}: no se obtuvo IdSolicitud (resp={resp})")
+                return
+            _log(f"  Solicitud {desc_log}: {id_solicitud} — esperando respuesta SAT...")
+            # Polling: máx 10 minutos
+            status = {}
+            for intento in range(120):
+                _time.sleep(5)
+                try:
+                    status = sat_svc.recover_comprobante_status(id_solicitud)
+                except Exception as exc:
+                    _log(f"  ADVERTENCIA estado: {exc}")
+                    continue
+                estado = status.get('EstadoSolicitud')
+                if estado == 3:   # TERMINADA
+                    _log(f"  Solicitud lista en {(intento+1)*5}s")
+                    break
+                elif estado in (4, 5, 6):  # ERROR / RECHAZADA / VENCIDA
+                    _log(f"ADVERTENCIA {desc_log}: estado {estado} — {status.get('CodigoEstadoSolicitud','')}")
+                    return
+                # 1=ACEPTADA 2=EN_PROCESO → seguir esperando
+            paquetes = status.get('IdsPaquetes', [])
+            if not paquetes:
+                _log(f"  Sin paquetes para {desc_log}: {status.get('CodigoEstadoSolicitud','sin CFDIs')}")
+                return
+            _log(f"  Descargando {len(paquetes)} paquete(s) {desc_log}...")
+            for id_paquete in paquetes:
+                try:
+                    meta, b64_data = sat_svc.recover_comprobante_download(id_paquete)
+                    zip_bytes = _b64.b64decode(b64_data)
+                    yield meta, zip_bytes
+                except Exception as exc:
+                    _log(f"  ADVERTENCIA descarga paquete {id_paquete}: {exc}")
+
         all_docto_uuids: set = set()
 
         # ── Fase 1: CFDIs tipo P ─────────────────────────────────────────────
@@ -1519,42 +1833,40 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
             _log("Solicitando CFDIs emitidos (tipo P) al SAT...")
             cobro_dir = base_dir / "input" / "cfdi_cobro"
             total_e = 0; paq = 0
-            try:
-                for _, data in sat_svc.recover_comprobante_iwait(
-                    fecha_inicial=fecha_ini, fecha_final=fecha_fin,
-                    rfc_emisor=signer.rfc,
-                    tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
-                ):
-                    paq += 1
-                    xmls = _extract_from_zip(data, "P")
-                    for fname, xb in xmls.items():
-                        (cobro_dir / fname).write_bytes(xb)
-                        all_docto_uuids.update(_docto_uuids(xb))
-                        total_e += 1
-                    _log(f"Paquete emitidos {paq}: acumulados {total_e} tipo P")
-            except Exception as exc:
-                _log(f"ADVERTENCIA emitidos: {exc}")
+            for _, data in _request_and_download(
+                sat_svc.recover_comprobante_emitted_request,
+                "emitidos-P",
+                fecha_inicial=fecha_ini, fecha_final=fecha_fin,
+                tipo_comprobante="P",
+                tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
+            ):
+                paq += 1
+                xmls = _extract_from_zip(data, "P")
+                for fname, xb in xmls.items():
+                    (cobro_dir / fname).write_bytes(xb)
+                    all_docto_uuids.update(_docto_uuids(xb))
+                    total_e += 1
+                _log(f"Paquete emitidos {paq}: acumulados {total_e} tipo P")
             _log(f"OK Emitidos tipo P: {total_e} en cfdi_cobro/")
 
         if recibidos:
             _log("Solicitando CFDIs recibidos (tipo P) al SAT...")
             pago_dir = base_dir / "input" / "cfdi_pago"
             total_r = 0; paq = 0
-            try:
-                for _, data in sat_svc.recover_comprobante_iwait(
-                    fecha_inicial=fecha_ini, fecha_final=fecha_fin,
-                    rfc_receptor=signer.rfc,
-                    tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
-                ):
-                    paq += 1
-                    xmls = _extract_from_zip(data, "P")
-                    for fname, xb in xmls.items():
-                        (pago_dir / fname).write_bytes(xb)
-                        all_docto_uuids.update(_docto_uuids(xb))
-                        total_r += 1
-                    _log(f"Paquete recibidos {paq}: acumulados {total_r} tipo P")
-            except Exception as exc:
-                _log(f"ADVERTENCIA recibidos: {exc}")
+            for _, data in _request_and_download(
+                sat_svc.recover_comprobante_received_request,
+                "recibidos-P",
+                fecha_inicial=fecha_ini, fecha_final=fecha_fin,
+                tipo_comprobante="P",
+                tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
+            ):
+                paq += 1
+                xmls = _extract_from_zip(data, "P")
+                for fname, xb in xmls.items():
+                    (pago_dir / fname).write_bytes(xb)
+                    all_docto_uuids.update(_docto_uuids(xb))
+                    total_r += 1
+                _log(f"Paquete recibidos {paq}: acumulados {total_r} tipo P")
             _log(f"OK Recibidos tipo P: {total_r} en cfdi_pago/")
 
         # ── Fase 2: Facturas tipo I relacionadas ─────────────────────────────
@@ -1563,34 +1875,34 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
             facturas_dir = base_dir / "input" / "cfdi_facturas"
             facturas_dir.mkdir(parents=True, exist_ok=True)
 
-            # Ampliar rango: 2 años atrás (facturas pueden ser de periodos previos)
             try:
                 fac_ini = _dt.date(max(2020, fecha_ini.year - 2), 1, 1)
             except Exception:
                 fac_ini = fecha_ini
 
-            total_fac = 0; paq = 0
+            total_fac = 0
 
-            for rfc_param, desc in [("rfc_emisor", "emitidas"), ("rfc_receptor", "recibidas")]:
+            for req_fn, desc in [
+                (sat_svc.recover_comprobante_emitted_request,  "emitidas-I"),
+                (sat_svc.recover_comprobante_received_request, "recibidas-I"),
+            ]:
                 paq = 0
-                try:
-                    for _, data in sat_svc.recover_comprobante_iwait(
-                        fecha_inicial=fac_ini, fecha_final=fecha_fin,
-                        **{rfc_param: signer.rfc},
-                        tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
-                    ):
-                        paq += 1
-                        xmls = _extract_from_zip(data, "I")
-                        for fname, xb in xmls.items():
-                            uuid_fac = _uuid_from_tfd(xb)
-                            if uuid_fac in all_docto_uuids:
-                                dest = facturas_dir / fname
-                                if not dest.exists():
-                                    dest.write_bytes(xb)
-                                    total_fac += 1
-                        _log(f"Facturas {desc} paquete {paq}: {total_fac} matching acumuladas")
-                except Exception as exc:
-                    _log(f"ADVERTENCIA facturas {desc}: {exc}")
+                for _, data in _request_and_download(
+                    req_fn, desc,
+                    fecha_inicial=fac_ini, fecha_final=fecha_fin,
+                    tipo_comprobante="I",
+                    tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
+                ):
+                    paq += 1
+                    xmls = _extract_from_zip(data, "I")
+                    for fname, xb in xmls.items():
+                        uuid_fac = _uuid_from_tfd(xb)
+                        if uuid_fac in all_docto_uuids:
+                            dest = facturas_dir / fname
+                            if not dest.exists():
+                                dest.write_bytes(xb)
+                                total_fac += 1
+                    _log(f"Facturas {desc} paquete {paq}: {total_fac} matching acumuladas")
 
             _log(f"OK Facturas tipo I guardadas: {total_fac} en cfdi_facturas/")
         else:
