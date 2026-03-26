@@ -7,6 +7,6 @@ python-docx
 num2words
 gunicorn
 werkzeug>=3.0
-satcfdi
+satcfdi==4.9.9
 anthropic
 google-generativeai
