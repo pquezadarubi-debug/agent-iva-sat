@@ -289,7 +289,7 @@ def _extraer_referencia(texto: str) -> str:
 def _nuevo_movimiento(fecha, desc, ref, cargo, abono, saldo):
     return {"fecha": fecha, "descripcion": desc, "referencia": ref,
             "cargo": cargo, "abono": abono, "saldo": saldo,
-            "banco": "", "archivo_pdf": "",
+            "banco": "", "cuenta_bancaria": "", "moneda": "MXN", "archivo_pdf": "",
             "id_cruce": "", "cruce_cfdi": False,
             "uuid_cfdi": "", "metodo_cruce": ""}
 
@@ -379,6 +379,31 @@ _ENCABEZADOS_TABLA = {
     "NUMERO", "DE", "MONEDA", "RFC", "SUCURSAL", "INTERESES", "ISR",
     "COMISIONES", "GAT", "NOMINAL", "REAL", "RETENIDO", "NETOS", "BRUTOS",
 }
+
+
+def _extraer_cuenta_bancaria(texto: str, banco: str) -> str:
+    """
+    Extrae el número de cuenta bancaria del texto de la primera página del PDF.
+    Soporta formatos Santander (65-XXXXXXXX-X), BBVA (10-11 dígitos), y genérico.
+    """
+    t = texto.upper()
+    # Santander: XX-XXXXXXXX-X
+    m = re.search(r'\b(\d{2}-\d{8}-\d{1})\b', texto)
+    if m:
+        return m.group(1)
+    # BBVA / genérico: buscar "CUENTA" seguido de número
+    m = re.search(r'(?:CUENTA|NO\.?|NUMERO|N[UÚ]MERO)[^\d]{0,20}(\d{10,18})', t)
+    if m:
+        return m.group(1)
+    # CLABE (18 dígitos)
+    m = re.search(r'\b(\d{18})\b', texto)
+    if m:
+        return m.group(1)
+    # Número de cuenta (10-11 dígitos)
+    m = re.search(r'\b(\d{10,11})\b', texto)
+    if m:
+        return m.group(1)
+    return ""
 
 
 def _detectar_banco(texto: str) -> str:
@@ -585,10 +610,22 @@ def leer_estado_cuenta(base_dir: Path) -> list:
 
                 movs_pdf.extend(movs_pagina)
 
-            # Etiquetar con banco de origen
+            # Extraer número de cuenta bancaria del encabezado
+            cuenta_pdf = _extraer_cuenta_bancaria(primera, banco)
+
+            # Detectar moneda del estado de cuenta
+            t_up = primera.upper()
+            if any(k in t_up for k in ("DOLAR", "USD", "DOLARES", "DIVISA")):
+                moneda_pdf = "USD"
+            else:
+                moneda_pdf = "MXN"
+
+            # Etiquetar con banco, cuenta y moneda de origen
             for mv in movs_pdf:
-                mv["banco"] = banco
-                mv["archivo_pdf"] = pdf_path.name
+                mv["banco"]           = banco
+                mv["cuenta_bancaria"] = cuenta_pdf
+                mv["moneda"]          = moneda_pdf
+                mv["archivo_pdf"]     = pdf_path.name
 
             movimientos.extend(movs_pdf)
             doc.close()
@@ -704,6 +741,66 @@ def leer_auxiliar_sap(base_dir: Path) -> tuple[pd.DataFrame | None, dict, list]:
     return df, col_map, advertencias
 
 
+def leer_auxiliar_bancos(base_dir: Path) -> dict:
+    """
+    Lee el auxiliar SAP de bancos.
+    Retorna dict: {cuenta_bancaria_normalizada: {cuenta_sap, nombre_banco, ...}}
+    Soporta columnas: CUENTA SAP, NOMBRE BANCO, CUENTA BANCARIA (o CUENTA BA)
+    """
+    def _xls(d):
+        return (list(d.glob("*.xlsx")) + list(d.glob("*.xls")) +
+                list(d.glob("*.XLSX")) + list(d.glob("*.XLS")))
+
+    aux_dir  = base_dir / "input" / "aux_bancos"
+    archivos = _xls(aux_dir)
+    if not archivos:
+        return {}
+
+    cuentas = {}
+    for arch in archivos:
+        try:
+            df_raw = pd.read_excel(arch, header=None, dtype=str)
+            # Buscar fila de encabezado
+            header_row = 0
+            for idx, row in df_raw.iterrows():
+                vals = " ".join(str(v).lower() for v in row if pd.notna(v))
+                if "cuenta" in vals and ("banco" in vals or "sap" in vals):
+                    header_row = idx
+                    break
+            df = pd.read_excel(arch, header=header_row, dtype=str)
+            df.columns = [str(c).strip().upper() for c in df.columns]
+
+            # Detectar columnas flexiblemente
+            col_sap    = next((c for c in df.columns if "SAP" in c or c == "CUENTA"), None)
+            col_banco  = next((c for c in df.columns if "BANCO" in c and "CUENTA" not in c), None)
+            col_cuenta = next((c for c in df.columns if "BANCARIA" in c or "CUENTA BA" in c
+                               or (c.startswith("CUENTA") and c != col_sap)), None)
+
+            if not col_cuenta:
+                continue
+
+            for _, row in df.iterrows():
+                cta_raw = str(row.get(col_cuenta, "") or "").strip()
+                if not cta_raw or cta_raw.lower() in ("nan", "none", ""):
+                    continue
+                # Normalizar: quitar guiones y espacios para comparación
+                cta_norm = re.sub(r'[\s\-]', '', cta_raw)
+                cuentas[cta_norm] = {
+                    "cuenta_bancaria": cta_raw,
+                    "cuenta_sap":  str(row.get(col_sap, "") or "").strip(),
+                    "nombre_banco": str(row.get(col_banco, "") or "").strip(),
+                }
+        except Exception as e:
+            print(f"ADVERTENCIA auxiliar bancos {arch.name}: {e}", flush=True)
+
+    return cuentas
+
+
+def _normalizar_cuenta(cuenta: str) -> str:
+    """Quita guiones, espacios y ceros iniciales para comparación flexible."""
+    return re.sub(r'[\s\-]', '', cuenta).lstrip("0")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # LÓGICA DE CRUCE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -722,74 +819,93 @@ def _fecha_a_date(texto: str) -> datetime.date | None:
 def cruzar_con_banco(registros: list, movimientos: list, periodo_str: str) -> int:
     """
     Cruza registros de CFDI con movimientos bancarios.
-    Modifica en lugar registros y movimientos.
+    - Agrupa movimientos por cuenta bancaria para evitar falsos cruces
+    - Respeta moneda: USD vs MXN
+    - Modifica en lugar registros y movimientos.
     Retorna contador de cruces.
     """
-    cruce_seq  = [0]  # contador de IDs
+    cruce_seq   = [0]
     total_cruce = 0
 
     def nuevo_id():
         cruce_seq[0] += 1
         return f"{PREFIJO_CRUCE}-{periodo_str}-{cruce_seq[0]:04d}"
 
-    # Índice de movimientos por referencia
-    idx_ref = {}
+    # Agrupar movimientos por cuenta (normalizada) y por moneda
+    idx_ref_global: dict = {}
+    movs_por_cuenta: dict = {}
     for m in movimientos:
+        cta = _normalizar_cuenta(m.get("cuenta_bancaria", "") or "")
+        movs_por_cuenta.setdefault(cta, []).append(m)
         if m["referencia"]:
-            idx_ref.setdefault(m["referencia"], []).append(m)
+            idx_ref_global.setdefault(m["referencia"], []).append(m)
+
+    def _candidatos_para_registro(r) -> list:
+        """Devuelve movimientos candidatos: primero misma cuenta, luego todos."""
+        cta_cfdi = _normalizar_cuenta(r.get("cta_ben", "") or "")
+        if cta_cfdi and cta_cfdi in movs_por_cuenta:
+            return movs_por_cuenta[cta_cfdi]
+        # Fallback: todos los movimientos
+        return movimientos
+
+    def _monto_movimiento(m: dict, moneda_r: str) -> float:
+        """Usa abono/cargo según moneda; para USD usa cargo si la cuenta es extranjera."""
+        if moneda_r == "MXN":
+            return m["abono"] if m["abono"] else m["cargo"]
+        else:
+            # Para moneda extranjera, el monto puede estar en cargo o abono
+            return m["abono"] if m["abono"] else m["cargo"]
 
     for r in registros:
         if r["cruce_edo_cuenta"]:
             continue
 
-        num_op    = r["num_operacion"]
-        fecha_p   = _fecha_a_date(r["fecha_pago"])
-        monto_r   = r["importe_pagado_mxn"]
+        num_op     = r["num_operacion"]
+        fecha_p    = _fecha_a_date(r["fecha_pago"])
+        moneda_r   = r.get("moneda_doc", "MXN")
+        # Para USD usar importe_pagado (moneda original); para MXN usar MXN
+        monto_r    = (r["importe_pagado"] if moneda_r != "MXN"
+                      else r["importe_pagado_mxn"])
+        candidatos = _candidatos_para_registro(r)
         id_asignar = ""
 
         # Nivel 1: EXACTO por num_operacion
-        if num_op and num_op in idx_ref:
-            for m in idx_ref[num_op]:
+        if num_op:
+            for m in idx_ref_global.get(num_op, []):
                 if not m["cruce_cfdi"]:
                     id_asignar = nuevo_id()
-                    m["id_cruce"]    = id_asignar
-                    m["cruce_cfdi"]  = True
-                    m["uuid_cfdi"]   = r["uuid_cp"]
-                    m["metodo_cruce"] = "EXACTO"
+                    m.update(id_cruce=id_asignar, cruce_cfdi=True,
+                             uuid_cfdi=r["uuid_cp"], metodo_cruce="EXACTO")
                     r["metodo_cruce"] = "EXACTO"
                     break
 
-        # Nivel 2: Monto + Fecha
+        # Nivel 2: Monto + Fecha (dentro de candidatos de la misma cuenta)
         if not id_asignar:
-            for m in movimientos:
+            for m in candidatos:
                 if m["cruce_cfdi"]:
                     continue
-                abono = m["abono"] if m["abono"] else m["cargo"]
-                if abs(abono - monto_r) <= TOLERANCIA_MONTO:
+                monto_m = _monto_movimiento(m, moneda_r)
+                tol = max(1.0, monto_r * 0.005)
+                if abs(monto_m - monto_r) <= tol:
                     fecha_m = _fecha_a_date(m["fecha"])
-                    if fecha_p and fecha_m:
-                        diff = abs((fecha_p - fecha_m).days)
-                        if diff <= TOLERANCIA_DIAS:
-                            id_asignar = nuevo_id()
-                            m["id_cruce"]    = id_asignar
-                            m["cruce_cfdi"]  = True
-                            m["uuid_cfdi"]   = r["uuid_cp"]
-                            m["metodo_cruce"] = "MONTO+FECHA"
-                            r["metodo_cruce"] = "MONTO+FECHA"
-                            break
+                    if fecha_p and fecha_m and abs((fecha_p - fecha_m).days) <= TOLERANCIA_DIAS:
+                        id_asignar = nuevo_id()
+                        m.update(id_cruce=id_asignar, cruce_cfdi=True,
+                                 uuid_cfdi=r["uuid_cp"], metodo_cruce="MONTO+FECHA")
+                        r["metodo_cruce"] = "MONTO+FECHA"
+                        break
 
-        # Nivel 3: Solo monto (cruce débil)
+        # Nivel 3: Solo monto (cruce débil, busca en todos)
         if not id_asignar:
             for m in movimientos:
                 if m["cruce_cfdi"]:
                     continue
-                abono = m["abono"] if m["abono"] else m["cargo"]
-                if abs(abono - monto_r) <= TOLERANCIA_MONTO:
+                monto_m = _monto_movimiento(m, moneda_r)
+                tol = max(1.0, monto_r * 0.005)
+                if abs(monto_m - monto_r) <= tol:
                     id_asignar = nuevo_id()
-                    m["id_cruce"]    = id_asignar
-                    m["cruce_cfdi"]  = True
-                    m["uuid_cfdi"]   = r["uuid_cp"]
-                    m["metodo_cruce"] = "SOLO_MONTO"
+                    m.update(id_cruce=id_asignar, cruce_cfdi=True,
+                             uuid_cfdi=r["uuid_cp"], metodo_cruce="SOLO_MONTO")
                     r["metodo_cruce"] = "SOLO_MONTO (débil)"
                     break
 
