@@ -136,6 +136,11 @@ header{background:var(--az);color:#fff;padding:10px 20px;
 .ust{font-size:11px;margin-top:6px;font-weight:500}
 .uzone.ok .ust{color:var(--vfg)}
 .uzone:not(.ok) .ust{color:#aaa}
+.ubtn-del{position:absolute;top:6px;right:6px;background:#C00000;color:#fff;
+          border:none;border-radius:3px;padding:2px 7px;font-size:10px;
+          cursor:pointer;z-index:10;display:none}
+.uzone.ok .ubtn-del{display:block}
+.ubtn-del:hover{background:#a00000}
 /* Config form */
 .cfg-form{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .fld{display:flex;flex-direction:column;gap:3px}
@@ -227,6 +232,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     <div class="upload-grid">
       <div class="uzone" id="z-cfdi-cobro" ondragover="drag(event,'cfdi-cobro')"
            ondragleave="undrag('cfdi-cobro')" ondrop="drop(event,'cfdi-cobro')">
+        <button class="ubtn-del" onclick="borrarZona(event,'cfdi-cobro')">&#10005; Borrar</button>
         <input type="file" multiple accept=".xml,.XML"
                onchange="subirMultiple(this,'cfdi-cobro')" id="inp-cfdi-cobro">
         <div class="uicon">&#128196;</div>
@@ -236,6 +242,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
       </div>
       <div class="uzone" id="z-aux-cobrado" ondragover="drag(event,'aux-cobrado')"
            ondragleave="undrag('aux-cobrado')" ondrop="drop(event,'aux-cobrado')">
+        <button class="ubtn-del" onclick="borrarZona(event,'aux-cobrado')">&#10005; Borrar</button>
         <input type="file" multiple accept=".xlsx,.xls,.XLSX,.XLS"
                onchange="subirMultiple(this,'aux-cobrado')" id="inp-aux-cobrado">
         <div class="uicon">&#128202;</div>
@@ -252,6 +259,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     <div class="upload-grid">
       <div class="uzone" id="z-cfdi-pago" ondragover="drag(event,'cfdi-pago')"
            ondragleave="undrag('cfdi-pago')" ondrop="drop(event,'cfdi-pago')">
+        <button class="ubtn-del" onclick="borrarZona(event,'cfdi-pago')">&#10005; Borrar</button>
         <input type="file" multiple accept=".xml,.XML"
                onchange="subirMultiple(this,'cfdi-pago')" id="inp-cfdi-pago">
         <div class="uicon">&#128196;</div>
@@ -261,6 +269,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
       </div>
       <div class="uzone" id="z-aux-pagado" ondragover="drag(event,'aux-pagado')"
            ondragleave="undrag('aux-pagado')" ondrop="drop(event,'aux-pagado')">
+        <button class="ubtn-del" onclick="borrarZona(event,'aux-pagado')">&#10005; Borrar</button>
         <input type="file" multiple accept=".xlsx,.xls,.XLSX,.XLS"
                onchange="subirMultiple(this,'aux-pagado')" id="inp-aux-pagado">
         <div class="uicon">&#128202;</div>
@@ -277,6 +286,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     <div class="upload-grid">
       <div class="uzone" id="z-pdf-bancos" ondragover="drag(event,'pdf-bancos')"
            ondragleave="undrag('pdf-bancos')" ondrop="drop(event,'pdf-bancos')">
+        <button class="ubtn-del" onclick="borrarZona(event,'pdf-bancos')">&#10005; Borrar</button>
         <input type="file" multiple accept=".pdf,.PDF"
                onchange="subirMultiple(this,'pdf-bancos')" id="inp-pdf-bancos">
         <div class="uicon">&#128203;</div>
@@ -286,6 +296,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
       </div>
       <div class="uzone" id="z-aux-bancos" ondragover="drag(event,'aux-bancos')"
            ondragleave="undrag('aux-bancos')" ondrop="drop(event,'aux-bancos')">
+        <button class="ubtn-del" onclick="borrarZona(event,'aux-bancos')">&#10005; Borrar</button>
         <input type="file" multiple accept=".xlsx,.xls,.XLSX,.XLS"
                onchange="subirMultiple(this,'aux-bancos')" id="inp-aux-bancos">
         <div class="uicon">&#128202;</div>
@@ -302,6 +313,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     <div class="upload-grid" style="grid-template-columns:1fr 1fr">
       <div class="uzone" id="z-machote" ondragover="drag(event,'machote')"
            ondragleave="undrag('machote')" ondrop="drop(event,'machote')">
+        <button class="ubtn-del" onclick="borrarZona(event,'machote')">&#10005; Borrar</button>
         <input type="file" accept=".docx,.DOCX"
                onchange="subirUno(this,'machote')" id="inp-machote">
         <div class="uicon">&#128221;</div>
@@ -625,6 +637,15 @@ function finProceso(d){
   showTab('entregables');
 }
 
+async function borrarZona(e, tipo){
+  e.stopPropagation(); e.preventDefault();
+  if(!confirm('Borrar todos los archivos de esta zona?')) return;
+  await fetch('/limpiar_zona',{method:'POST',
+    headers:{'Content-Type':'application/json','X-Sid':SID},
+    body:JSON.stringify({tipo})});
+  await actualizarEstado();
+}
+
 async function limpiar(){
   if(!confirm('Limpiar archivos de output y comenzar nuevo periodo?')) return;
   await fetch('/limpiar',{method:'POST',headers:{'X-Sid':SID}});
@@ -843,6 +864,34 @@ def download(tipo: str):
     for f in base.glob(f"{pre}*{ext}"):
         return send_file(str(f), as_attachment=True, download_name=f.name)
     return "Archivo no generado aun", 404
+
+
+@app.route("/limpiar_zona", methods=["POST"])
+def limpiar_zona():
+    sid = _sid_from_request()
+    if not _check_sid(sid):
+        return jsonify({"ok": False}), 400
+    datos = request.get_json(force=True, silent=True) or {}
+    tipo  = datos.get("tipo", "")
+    destdir_map = {
+        "cfdi-cobro":  "cfdi_cobro",
+        "cfdi-pago":   "cfdi_pago",
+        "aux-cobrado": "aux_cobrado",
+        "aux-pagado":  "aux_pagado",
+        "pdf-bancos":  "pdf_bancos",
+        "aux-bancos":  "aux_bancos",
+        "machote":     "machote",
+    }
+    if tipo not in destdir_map:
+        return jsonify({"ok": False, "error": "tipo invalido"}), 400
+    carpeta = _session_dir(sid) / "input" / destdir_map[tipo]
+    for f in carpeta.iterdir():
+        try:
+            if f.is_file():
+                f.unlink()
+        except Exception:
+            pass
+    return jsonify({"ok": True})
 
 
 @app.route("/limpiar", methods=["POST"])
