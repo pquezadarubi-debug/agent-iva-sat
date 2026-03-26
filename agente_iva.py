@@ -123,7 +123,8 @@ def cargar_config(base_dir: Path) -> dict:
 # PASO 2 — PARSEO DE CFDIs COMPLEMENTO DE PAGO
 # ══════════════════════════════════════════════════════════════════════════════
 
-def parsear_cfdis(base_dir: Path, carpeta: str = "cfdi") -> tuple[list, list]:
+def parsear_cfdis(base_dir: Path, carpeta: str = "cfdi",
+                  tipo_cfdi: str = "pago") -> tuple[list, list]:
     """
     Lee todos los XMLs en input/{carpeta}/.
     Retorna (registros, errores).
@@ -218,6 +219,12 @@ def parsear_cfdis(base_dir: Path, carpeta: str = "cfdi") -> tuple[list, list]:
                         imp_pagado_mxn = imp_pagado
                         iva16_mxn      = iva16
 
+                    # Cuenta propia: CtaBeneficiario en cobros, CtaOrdenante en pagos
+                    if tipo_cfdi == "cobro":
+                        cuenta_nuestra = cta_ben  # recibimos en cta_ben
+                    else:
+                        cuenta_nuestra = cta_ord  # pagamos desde cta_ord
+
                     registros.append({
                         "uuid_cp":          uuid_cp,
                         "fecha_emision":    fecha_emision[:10],
@@ -227,6 +234,8 @@ def parsear_cfdis(base_dir: Path, carpeta: str = "cfdi") -> tuple[list, list]:
                         "banco_ord":        banco_ord,
                         "cta_ord":          cta_ord,
                         "cta_ben":          cta_ben,
+                        "cuenta_nuestra":   cuenta_nuestra,
+                        "tipo_cfdi":        tipo_cfdi,
                         "rfc_emisor":       rfc_emisor,
                         "nombre_emisor":    nombre_emisor,
                         "rfc_receptor":     rfc_receptor,
@@ -847,10 +856,18 @@ def cruzar_con_banco(registros: list, movimientos: list, periodo_str: str) -> in
             idx_ref_global.setdefault(m["referencia"], []).append(m)
 
     def _candidatos_para_registro(r) -> list:
-        """Devuelve movimientos candidatos: primero misma cuenta, luego todos."""
-        cta_cfdi = _normalizar_cuenta(r.get("cta_ben", "") or "")
-        if cta_cfdi and cta_cfdi in movs_por_cuenta:
-            return movs_por_cuenta[cta_cfdi]
+        """
+        Devuelve movimientos candidatos de la misma cuenta bancaria.
+        - COBRO: cuenta_nuestra = CtaBeneficiario (recibimos)
+        - PAGO:  cuenta_nuestra = CtaOrdenante   (pagamos)
+        Si está vacío o no hay match, devuelve todos los movimientos.
+        """
+        cta_cfdi = _normalizar_cuenta(r.get("cuenta_nuestra", "") or "")
+        if cta_cfdi:
+            # Buscar coincidencia parcial (últimos 4+ dígitos)
+            for cta_key in movs_por_cuenta:
+                if cta_key.endswith(cta_cfdi) or cta_cfdi.endswith(cta_key):
+                    return movs_por_cuenta[cta_key]
         # Fallback: todos los movimientos
         return movimientos
 
@@ -1725,10 +1742,12 @@ def main():
     # ── PASO 2: Parseo CFDIs ────────────────────────────────────────────────
     # CFDIs de PAGO (proveedor es emisor) → IVA acreditable
     progreso("cfdi", 0, "Parseando CFDIs de pago...")
-    registros_pago, errores_pago = parsear_cfdis(base_dir, carpeta="cfdi_pago")
+    registros_pago, errores_pago = parsear_cfdis(base_dir, carpeta="cfdi_pago",
+                                                   tipo_cfdi="pago")
     # CFDIs de COBRO (nuestra empresa es emisora) → IVA trasladado
     progreso("cfdi", 50, "Parseando CFDIs de cobro...")
-    registros_cobro, errores_cobro = parsear_cfdis(base_dir, carpeta="cfdi_cobro")
+    registros_cobro, errores_cobro = parsear_cfdis(base_dir, carpeta="cfdi_cobro",
+                                                    tipo_cfdi="cobro")
     errores_cfdi = errores_pago + errores_cobro
     # Para el procesamiento principal usamos los de pago
     registros = registros_pago
