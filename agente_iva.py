@@ -1715,6 +1715,433 @@ def generar_escrito_word(cfg: dict, registros: list,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ANÁLISIS DE RIESGOS CON IA (Claude + Gemini en paralelo)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_PROMPT_RIESGOS = """Eres un experto en auditoría fiscal mexicana especializado en IVA y devoluciones ante el SAT.
+
+Analiza las siguientes operaciones de un contribuyente y evalúa el RIESGO DE RECHAZO del IVA acreditable por parte del SAT.
+
+CONTRIBUYENTE: {empresa}
+RFC: {rfc}
+PERIODO: {periodo}
+
+PROVEEDORES Y OPERACIONES (CFDIs tipo P — Complemento de Pago):
+{operaciones}
+
+Para cada proveedor, evalúa el riesgo considerando:
+- Materialidad de las operaciones (Art. 5-A CFF, criterios de la PRODECON)
+- Requisitos de deducibilidad (Art. 27 LISR, Art. 5 LIVA)
+- Forma de pago (efectivo = mayor riesgo)
+- RFC del proveedor (posible presencia en listas negras del SAT: EFOS/EDOS)
+- Consistencia de los datos
+- Jurisprudencias del TFJFA/SCJN en materia de IVA
+
+Responde ÚNICAMENTE con un JSON válido con exactamente este formato (sin markdown, sin texto adicional):
+{{
+  "analisis": [
+    {{
+      "rfc_proveedor": "RFC aquí",
+      "nombre_proveedor": "Nombre aquí",
+      "nivel_riesgo": "BAJO|MEDIO|ALTO|CRÍTICO",
+      "iva_en_riesgo": 12345.67,
+      "factores_riesgo": ["factor 1", "factor 2"],
+      "criterios_sat": ["Art. X LIVA", "Art. Y CFF"],
+      "jurisprudencias": ["Tesis/jurisprudencia relevante"],
+      "recomendaciones": ["Acción recomendada 1"],
+      "documentacion_requerida": ["Documento 1", "Documento 2"]
+    }}
+  ],
+  "resumen_general": "Resumen ejecutivo del riesgo global",
+  "alertas_criticas": ["Alerta importante 1"]
+}}"""
+
+
+def _agrupar_proveedores(registros: list) -> list:
+    """Agrupa los registros por RFC emisor para análisis de riesgos."""
+    from collections import defaultdict
+    grupos: dict = defaultdict(lambda: {
+        "rfc": "", "nombre": "", "iva_total": 0.0, "monto_total": 0.0,
+        "num_ops": 0, "con_cruce_banco": 0, "con_cruce_sap": 0,
+        "formas_pago": set(), "tiene_efectivo": False,
+    })
+    for r in registros:
+        rfc = r.get("rfc_emisor", "SIN_RFC")
+        g = grupos[rfc]
+        g["rfc"]   = rfc
+        g["nombre"] = r.get("nombre_emisor", "")
+        g["iva_total"]   += r.get("iva16_mxn", 0.0)
+        g["monto_total"] += r.get("importe_pagado_mxn", 0.0)
+        g["num_ops"] += 1
+        if r.get("cruce_edo_cuenta"):
+            g["con_cruce_banco"] += 1
+        if r.get("cruce_sap"):
+            g["con_cruce_sap"] += 1
+        fp = r.get("forma_pago", "")
+        g["formas_pago"].add(fp)
+        if fp == "01":  # Efectivo
+            g["tiene_efectivo"] = True
+    # Serializar sets para JSON
+    result = []
+    for rfc, g in grupos.items():
+        g["formas_pago"] = list(g["formas_pago"])
+        sin_cruce = g["num_ops"] - max(g["con_cruce_banco"], g["con_cruce_sap"])
+        g["sin_cruce"] = max(0, sin_cruce)
+        result.append(g)
+    return result
+
+
+def _llamar_claude(prompt: str, api_key: str) -> dict:
+    """Llama a la API de Claude y retorna el JSON de respuesta."""
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        texto = msg.content[0].text.strip()
+        # Limpiar posible markdown
+        if texto.startswith("```"):
+            texto = re.sub(r"^```[a-z]*\n?", "", texto)
+            texto = re.sub(r"\n?```$", "", texto)
+        return json.loads(texto)
+    except Exception as exc:
+        return {"error": str(exc), "analisis": [], "resumen_general": "",
+                "alertas_criticas": []}
+
+
+def _llamar_gemini(prompt: str, api_key: str) -> dict:
+    """Llama a la API de Gemini y retorna el JSON de respuesta."""
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            "gemini-1.5-pro",
+            generation_config={"response_mime_type": "application/json"},
+        )
+        resp = model.generate_content(prompt)
+        return json.loads(resp.text)
+    except Exception as exc:
+        return {"error": str(exc), "analisis": [], "resumen_general": "",
+                "alertas_criticas": []}
+
+
+_NIVEL_ORDEN = {"BAJO": 0, "MEDIO": 1, "ALTO": 2, "CRÍTICO": 3}
+
+
+def _combinar_analisis(lista_claude: list, lista_gemini: list) -> list:
+    """
+    Combina los análisis de Claude y Gemini.
+    Para cada proveedor, toma el nivel de riesgo más alto y une factores.
+    """
+    gemini_by_rfc = {g["rfc_proveedor"]: g for g in lista_gemini
+                     if "rfc_proveedor" in g}
+    combinado = []
+    for c in lista_claude:
+        rfc = c.get("rfc_proveedor", "")
+        g   = gemini_by_rfc.get(rfc, {})
+        niv_c = c.get("nivel_riesgo", "BAJO")
+        niv_g = g.get("nivel_riesgo", "BAJO")
+        nivel = niv_c if _NIVEL_ORDEN.get(niv_c, 0) >= _NIVEL_ORDEN.get(niv_g, 0) else niv_g
+
+        factores = list(dict.fromkeys(
+            c.get("factores_riesgo", []) + g.get("factores_riesgo", [])
+        ))
+        criterios = list(dict.fromkeys(
+            c.get("criterios_sat", []) + g.get("criterios_sat", [])
+        ))
+        jurisprudencias = list(dict.fromkeys(
+            c.get("jurisprudencias", []) + g.get("jurisprudencias", [])
+        ))
+        recom = list(dict.fromkeys(
+            c.get("recomendaciones", []) + g.get("recomendaciones", [])
+        ))
+        docs = list(dict.fromkeys(
+            c.get("documentacion_requerida", []) + g.get("documentacion_requerida", [])
+        ))
+        combinado.append({
+            "rfc_proveedor":         rfc,
+            "nombre_proveedor":      c.get("nombre_proveedor", ""),
+            "nivel_riesgo":          nivel,
+            "nivel_claude":          niv_c,
+            "nivel_gemini":          niv_g,
+            "iva_en_riesgo":         c.get("iva_en_riesgo", 0),
+            "factores_riesgo":       factores,
+            "criterios_sat":         criterios,
+            "jurisprudencias":       jurisprudencias,
+            "recomendaciones":       recom,
+            "documentacion_requerida": docs,
+        })
+    # Añadir los que solo están en Gemini
+    rfcs_claude = {c["rfc_proveedor"] for c in lista_claude}
+    for g in lista_gemini:
+        if g.get("rfc_proveedor") not in rfcs_claude:
+            g["nivel_claude"] = ""
+            g["nivel_gemini"] = g.get("nivel_riesgo", "BAJO")
+            combinado.append(g)
+    return combinado
+
+
+def analizar_riesgos_ia(registros_pago: list, cfg: dict) -> dict | None:
+    """
+    Analiza el riesgo de rechazo por IVA usando Claude y Gemini en paralelo.
+    Retorna dict con 'analisis', 'resumen_general', 'alertas_criticas',
+    o None si no hay API keys configuradas.
+    """
+    import threading as _thr
+
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    gemini_key    = os.environ.get("GEMINI_API_KEY", "")
+
+    if not anthropic_key and not gemini_key:
+        progreso("riesgos", 0,
+                 "ADVERTENCIA: ANTHROPIC_API_KEY y GEMINI_API_KEY no configuradas — omitiendo análisis IA")
+        return None
+
+    if not registros_pago:
+        progreso("riesgos", 0, "Sin registros de pago para analizar riesgos")
+        return None
+
+    proveedores = _agrupar_proveedores(registros_pago)
+    empresa  = cfg.get("empresa", "")
+    rfc_emp  = cfg.get("rfc", "")
+    periodo  = cfg.get("periodo_str", "")
+
+    # Serializar proveedores para el prompt (limitar a top 50 por IVA)
+    top_prov = sorted(proveedores, key=lambda x: x["iva_total"], reverse=True)[:50]
+    ops_txt = json.dumps(top_prov, ensure_ascii=False, indent=2)
+    prompt = _PROMPT_RIESGOS.format(
+        empresa=empresa, rfc=rfc_emp, periodo=periodo, operaciones=ops_txt
+    )
+
+    resultado_claude: dict = {}
+    resultado_gemini: dict = {}
+    errores: list = []
+
+    def _run_claude():
+        if not anthropic_key:
+            return
+        progreso("riesgos", 20, "Consultando Claude...")
+        r = _llamar_claude(prompt, anthropic_key)
+        resultado_claude.update(r)
+        if "error" in r:
+            errores.append(f"Claude: {r['error']}")
+        else:
+            progreso("riesgos", 50, "Respuesta Claude recibida")
+
+    def _run_gemini():
+        if not gemini_key:
+            return
+        progreso("riesgos", 25, "Consultando Gemini...")
+        r = _llamar_gemini(prompt, gemini_key)
+        resultado_gemini.update(r)
+        if "error" in r:
+            errores.append(f"Gemini: {r['error']}")
+        else:
+            progreso("riesgos", 55, "Respuesta Gemini recibida")
+
+    t1 = _thr.Thread(target=_run_claude)
+    t2 = _thr.Thread(target=_run_gemini)
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+
+    for err in errores:
+        print(f"ADVERTENCIA IA: {err}", flush=True)
+
+    # Si solo hay una fuente, usarla directamente
+    if resultado_claude and not resultado_gemini.get("analisis"):
+        combinado = resultado_claude.get("analisis", [])
+        for c in combinado:
+            c["nivel_claude"] = c.get("nivel_riesgo", "BAJO")
+            c["nivel_gemini"] = "—"
+    elif resultado_gemini and not resultado_claude.get("analisis"):
+        combinado = resultado_gemini.get("analisis", [])
+        for c in combinado:
+            c["nivel_gemini"] = c.get("nivel_riesgo", "BAJO")
+            c["nivel_claude"] = "—"
+    else:
+        combinado = _combinar_analisis(
+            resultado_claude.get("analisis", []),
+            resultado_gemini.get("analisis", []),
+        )
+
+    # Ordenar por nivel de riesgo descendente
+    combinado.sort(key=lambda x: _NIVEL_ORDEN.get(x.get("nivel_riesgo", "BAJO"), 0),
+                   reverse=True)
+
+    alertas = list(dict.fromkeys(
+        resultado_claude.get("alertas_criticas", []) +
+        resultado_gemini.get("alertas_criticas", [])
+    ))
+    resumen = (resultado_claude.get("resumen_general") or
+               resultado_gemini.get("resumen_general") or "")
+
+    return {"analisis": combinado, "resumen_general": resumen,
+            "alertas_criticas": alertas}
+
+
+_COLOR_BAJO     = "E2EFDA"
+_COLOR_MEDIO    = "FFF2CC"
+_COLOR_ALTO     = "FCE4D6"
+_COLOR_CRITICO  = "FF0000"
+_FG_CRITICO     = "FFFFFF"
+
+
+def generar_reporte_riesgos(registros_pago: list, analisis: dict,
+                             base_dir: Path, periodo_str: str) -> Path:
+    """Genera el Excel de análisis de riesgos de rechazo por IVA."""
+    out_path = base_dir / "output" / f"reporte_riesgos_{periodo_str}.xlsx"
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+
+    # ── HOJA 1: Análisis por Proveedor ────────────────────────────────────
+    ws1 = wb.create_sheet("Análisis por Proveedor")
+    enc1 = [
+        "RFC Proveedor", "Nombre Proveedor", "IVA en Riesgo",
+        "Nivel Riesgo", "Claude", "Gemini",
+        "Factores de Riesgo", "Criterios SAT", "Jurisprudencias",
+        "Recomendaciones", "Documentación Requerida",
+    ]
+    for col, e in enumerate(enc1, 1):
+        c = ws1.cell(row=1, column=col, value=e)
+        c.fill = _fill("1F4E79"); c.font = _font(bold=True, color="FFFFFF")
+        c.border = _borde_delgado(); c.alignment = Alignment(horizontal="center", wrap_text=True)
+
+    _COLOR_NIVEL = {
+        "BAJO": (_COLOR_BAJO, "375623"),
+        "MEDIO": (_COLOR_MEDIO, "7F6000"),
+        "ALTO": (_COLOR_ALTO, "C00000"),
+        "CRÍTICO": (_COLOR_CRITICO, _FG_CRITICO),
+    }
+    for i, a in enumerate(analisis.get("analisis", []), 2):
+        nivel = a.get("nivel_riesgo", "BAJO")
+        bg, fg = _COLOR_NIVEL.get(nivel, (_COLOR_BAJO, "375623"))
+        datos = [
+            a.get("rfc_proveedor", ""),
+            a.get("nombre_proveedor", ""),
+            a.get("iva_en_riesgo", 0),
+            nivel,
+            a.get("nivel_claude", ""),
+            a.get("nivel_gemini", ""),
+            " | ".join(a.get("factores_riesgo", [])),
+            " | ".join(a.get("criterios_sat", [])),
+            " | ".join(a.get("jurisprudencias", [])),
+            " | ".join(a.get("recomendaciones", [])),
+            " | ".join(a.get("documentacion_requerida", [])),
+        ]
+        for col, val in enumerate(datos, 1):
+            c = ws1.cell(row=i, column=col, value=val)
+            c.fill = _fill(bg); c.font = _font(color=fg); c.border = _borde_delgado()
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            if col == 3:
+                c.number_format = '"$"#,##0.00'
+
+    ws1.freeze_panes = "A2"
+    ws1.auto_filter.ref = ws1.dimensions
+    anchos1 = [16, 32, 14, 10, 8, 8, 40, 30, 40, 40, 40]
+    for col, w in enumerate(anchos1, 1):
+        ws1.column_dimensions[get_column_letter(col)].width = w
+
+    # ── HOJA 2: Resumen Ejecutivo ─────────────────────────────────────────
+    ws2 = wb.create_sheet("Resumen Riesgos")
+    ws2.column_dimensions["A"].width = 35
+    ws2.column_dimensions["B"].width = 22
+
+    def _r_enc(txt):
+        r = ws2.max_row + 1
+        c = ws2.cell(row=r, column=1, value=txt)
+        c.fill = _fill("1F4E79"); c.font = _font(bold=True, color="FFFFFF", size=11)
+        ws2.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2)
+
+    def _r_fil(lbl, val):
+        r = ws2.max_row + 1
+        ws2.cell(row=r, column=1, value=lbl).font = _font(size=10)
+        c = ws2.cell(row=r, column=2, value=val)
+        c.font = _font(bold=True, size=10)
+        c.alignment = Alignment(horizontal="right")
+
+    lista_anal = analisis.get("analisis", [])
+    conteos = {"BAJO": 0, "MEDIO": 0, "ALTO": 0, "CRÍTICO": 0}
+    iva_por_nivel: dict = {"BAJO": 0.0, "MEDIO": 0.0, "ALTO": 0.0, "CRÍTICO": 0.0}
+    for a in lista_anal:
+        niv = a.get("nivel_riesgo", "BAJO")
+        conteos[niv] = conteos.get(niv, 0) + 1
+        iva_por_nivel[niv] = iva_por_nivel.get(niv, 0.0) + a.get("iva_en_riesgo", 0.0)
+
+    _r_enc("ANÁLISIS DE RIESGOS — IVA DEVOLUCIONES SAT")
+    _r_fil("Periodo", periodo_str)
+    _r_fil("Generado", datetime.datetime.now().strftime("%d/%m/%Y %H:%M"))
+    ws2.append([])
+    _r_enc("DISTRIBUCIÓN POR NIVEL DE RIESGO")
+    for niv in ["CRÍTICO", "ALTO", "MEDIO", "BAJO"]:
+        _r_fil(f"  {niv} — proveedores", conteos.get(niv, 0))
+        _r_fil(f"  {niv} — IVA en riesgo", f"${iva_por_nivel.get(niv, 0):,.2f}")
+    ws2.append([])
+    _r_enc("RESUMEN EJECUTIVO")
+    resumen_txt = analisis.get("resumen_general", "")
+    r_idx = ws2.max_row + 1
+    c = ws2.cell(row=r_idx, column=1, value=resumen_txt)
+    c.alignment = Alignment(wrap_text=True); c.font = _font(size=10)
+    ws2.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=2)
+    ws2.row_dimensions[r_idx].height = max(60, len(resumen_txt) // 3)
+    ws2.append([])
+    alertas = analisis.get("alertas_criticas", [])
+    if alertas:
+        _r_enc("ALERTAS CRÍTICAS")
+        for alerta in alertas:
+            r2 = ws2.max_row + 1
+            c2 = ws2.cell(row=r2, column=1, value=f"⚠ {alerta}")
+            c2.fill = _fill(_COLOR_ALTO); c2.font = _font(color="C00000")
+            c2.alignment = Alignment(wrap_text=True)
+            ws2.merge_cells(start_row=r2, start_column=1, end_row=r2, end_column=2)
+
+    # ── HOJA 3: Detalle por Operación ─────────────────────────────────────
+    ws3 = wb.create_sheet("Detalle por Operación")
+    enc3 = [
+        "UUID Complemento", "Fecha Pago", "RFC Emisor", "Nombre Emisor",
+        "IVA 16%", "Forma de Pago", "Cruce Banco", "Cruce SAP",
+        "Nivel Riesgo (Proveedor)", "Principales Factores",
+    ]
+    for col, e in enumerate(enc3, 1):
+        c = ws3.cell(row=1, column=col, value=e)
+        c.fill = _fill("1F4E79"); c.font = _font(bold=True, color="FFFFFF")
+        c.border = _borde_delgado()
+
+    # Crear índice rfc→nivel para join rápido
+    nivel_por_rfc = {a["rfc_proveedor"]: a for a in lista_anal}
+    for i, r in enumerate(registros_pago, 2):
+        rfc_e = r.get("rfc_emisor", "")
+        inf = nivel_por_rfc.get(rfc_e, {})
+        nivel = inf.get("nivel_riesgo", "SIN ANÁLISIS")
+        bg, fg = _COLOR_NIVEL.get(nivel, ("FFFFFF", "000000"))
+        factores = " | ".join(inf.get("factores_riesgo", [])[:2])
+        datos3 = [
+            r.get("uuid_cp", ""), r.get("fecha_pago", ""),
+            rfc_e, r.get("nombre_emisor", ""),
+            r.get("iva16_mxn", 0), r.get("forma_pago", ""),
+            "✓" if r.get("cruce_edo_cuenta") else "✗",
+            "✓" if r.get("cruce_sap") else "✗",
+            nivel, factores,
+        ]
+        for col, val in enumerate(datos3, 1):
+            c = ws3.cell(row=i, column=col, value=val)
+            c.fill = _fill(bg); c.font = _font(color=fg); c.border = _borde_delgado()
+            if col == 5: c.number_format = '"$"#,##0.00'
+
+    ws3.freeze_panes = "A2"
+    ws3.auto_filter.ref = ws3.dimensions
+    anchos3 = [36, 12, 14, 30, 12, 22, 8, 8, 16, 45]
+    for col, w in enumerate(anchos3, 1):
+        ws3.column_dimensions[get_column_letter(col)].width = w
+
+    wb.save(str(out_path))
+    progreso("riesgos", 100, f"Reporte de riesgos guardado: {out_path.name}")
+    return out_path
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MAIN — ORQUESTADOR
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1825,6 +2252,18 @@ def main():
     progreso("word", 10, "Generando escrito de devolución...")
     ruta_word = generar_escrito_word(cfg, registros, base_dir, periodo_str)
 
+    # ── PASO 9: Análisis de Riesgos con IA ──────────────────────────────────
+    ruta_riesgos = None
+    cfg_riesgos = dict(cfg)
+    cfg_riesgos["periodo_str"] = periodo_str
+    progreso("riesgos", 5, "Iniciando análisis de riesgos con IA...")
+    analisis_ia = analizar_riesgos_ia(registros_pago, cfg_riesgos)
+    if analisis_ia is not None:
+        progreso("riesgos", 80, "Generando reporte de riesgos...")
+        ruta_riesgos = generar_reporte_riesgos(
+            registros_pago, analisis_ia, base_dir, periodo_str
+        )
+
     # ── RESUMEN FINAL ────────────────────────────────────────────────────────
     total_cfdis_cp  = len(set(r["uuid_cp"] for r in registros))
     total_facturas  = len(registros)
@@ -1862,6 +2301,8 @@ def main():
     print(f"   {ruta_sap_cobro_out.name if ruta_sap_cobro_out else 'N/A'}", flush=True)
     print(f"   {ruta_pdf.name if ruta_pdf else 'N/A'}", flush=True)
     print(f"   {ruta_word.name}", flush=True)
+    if ruta_riesgos:
+        print(f"   {ruta_riesgos.name}", flush=True)
 
 
 if __name__ == "__main__":

@@ -8,3 +8,5 @@ num2words
 gunicorn
 werkzeug>=3.0
 satcfdi
+anthropic
+google-generativeai

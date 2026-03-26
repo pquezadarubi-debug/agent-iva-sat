@@ -523,6 +523,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     <div class="pit"><div class="pdot" id="d-pdf"></div><div class="plbl">Marcado PDF</div><div class="pbw"><div class="pb" id="b-pdf"></div></div><div class="pcnt" id="c-pdf">—</div></div>
     <div class="pit"><div class="pdot" id="d-auxiliar_cruzado"></div><div class="plbl">Auxiliar SAP cruzado</div><div class="pbw"><div class="pb" id="b-auxiliar_cruzado"></div></div><div class="pcnt" id="c-auxiliar_cruzado">—</div></div>
     <div class="pit"><div class="pdot" id="d-word"></div><div class="plbl">Escrito Word SAT</div><div class="pbw"><div class="pb" id="b-word"></div></div><div class="pcnt" id="c-word">—</div></div>
+    <div class="pit"><div class="pdot" id="d-riesgos"></div><div class="plbl">An&aacute;lisis de Riesgos IA</div><div class="pbw"><div class="pb" id="b-riesgos"></div></div><div class="pcnt" id="c-riesgos">—</div></div>
   </div>
   <div class="card">
     <div class="ctitle">Log</div>
@@ -595,6 +596,12 @@ header{background:var(--az);color:#fff;padding:10px 20px;
       <span class="enm" id="en-word">escrito_devolucion_IVA_YYYYMM.docx</span>
       <span class="est" id="es-word">Pendiente</span>
       <a class="btn sec" id="dl-word" href="/download/word" style="padding:4px 12px;font-size:11px;text-decoration:none">&#8659; Descargar</a>
+    </div>
+    <div class="er">
+      <span class="eico">&#128680;</span>
+      <span class="enm" id="en-riesgos">reporte_riesgos_YYYYMM.xlsx <span style="font-size:10px;color:#888">(requiere ANTHROPIC_API_KEY o GEMINI_API_KEY)</span></span>
+      <span class="est" id="es-riesgos">Pendiente</span>
+      <a class="btn sec" id="dl-riesgos" href="/download/riesgos" style="padding:4px 12px;font-size:11px;text-decoration:none">&#8659; Descargar</a>
     </div>
   </div>
   <div class="btn-row">
@@ -796,7 +803,7 @@ function iniciar(){
   btn.textContent='... Procesando';
   document.getElementById('logbox').innerHTML='';
   ['cfdi','estado_cuenta','cruce_banco','auxiliar_sap',
-   'excel','pdf','auxiliar_cruzado','word'].forEach(p=>{
+   'excel','pdf','auxiliar_cruzado','word','riesgos'].forEach(p=>{
     const d=document.getElementById('d-'+p);
     const b=document.getElementById('b-'+p);
     const c=document.getElementById('c-'+p);
@@ -844,12 +851,11 @@ function finProceso(d){
     ' &nbsp;|&nbsp; <b>Sin cruce:</b> '+sinc;
   // Actualizar entregables
   fetch('/archivos_output',{headers:{'X-Sid':SID}}).then(r=>r.json()).then(od=>{
-    ['excel','pdf','sap','word'].forEach(k=>{
-      if(od[k]){
-        document.getElementById('en-'+k).textContent=od[k];
-        const st=document.getElementById('es-'+k);
-        st.textContent='Listo ✓'; st.className='est ok';
-      }
+    ['excel','excel_cobro','pdf','sap','sap_cobro','word','riesgos'].forEach(k=>{
+      const enEl=document.getElementById('en-'+k);
+      const stEl=document.getElementById('es-'+k);
+      if(od[k]&&enEl){enEl.textContent=od[k];}
+      if(od[k]&&stEl){stEl.textContent='Listo \u2713';stEl.className='est ok';}
     });
   });
   showTab('entregables');
@@ -867,9 +873,9 @@ async function borrarZona(e, tipo){
 async function limpiar(){
   if(!confirm('Limpiar archivos de output y comenzar nuevo periodo?')) return;
   await fetch('/limpiar',{method:'POST',headers:{'X-Sid':SID}});
-  ['excel','pdf','sap','word'].forEach(k=>{
-    document.getElementById('es-'+k).textContent='Pendiente';
-    document.getElementById('es-'+k).className='est';
+  ['excel','excel_cobro','pdf','sap','sap_cobro','word','riesgos'].forEach(k=>{
+    const el=document.getElementById('es-'+k);
+    if(el){el.textContent='Pendiente';el.className='est';}
   });
   showTab('archivos');
 }
@@ -1049,6 +1055,7 @@ OUTPUT_MAP = {
     "sap":         ("auxiliar_IVA_Acreditable_",  ".xlsx"),
     "sap_cobro":   ("auxiliar_IVA_Trasladado_",   ".xlsx"),
     "word":        ("escrito_devolucion_",         ".docx"),
+    "riesgos":     ("reporte_riesgos_",           ".xlsx"),
 }
 
 
