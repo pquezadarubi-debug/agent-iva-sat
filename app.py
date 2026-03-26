@@ -38,6 +38,10 @@ AGENTE_PY = Path(__file__).parent / "agente_iva.py"
 _procs: dict[str, subprocess.Popen] = {}
 _procs_lock = threading.Lock()
 
+# ─── SAT download threads {sid: thread} ────────────────────────────────────
+_sat_threads: dict[str, threading.Thread] = {}
+_sat_threads_lock = threading.Lock()
+
 # ─── Archivo de usuarios ───────────────────────────────────────────────────
 USERS_FILE = SESSIONS_DIR / "users.json"
 
@@ -349,6 +353,16 @@ header{background:var(--az);color:#fff;padding:10px 20px;
      background:#f0f0f0;color:#666}
 .est.ok{background:var(--vbg);color:var(--vfg)}
 .hidden{display:none!important}
+/* SAT download */
+.sat-fiel-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.sat-fiel-zone{border:2px dashed var(--borde);border-radius:6px;padding:14px;
+  text-align:center;cursor:pointer;transition:border-color .15s}
+.sat-fiel-zone.ok{border-color:#4CAF50;background:var(--vbg)}
+.sat-fiel-zone label{cursor:pointer;display:block}
+.sat-fiel-zone input[type=file]{display:none}
+.sat-log{background:#1e1e2e;color:#cdd6f4;font-family:monospace;font-size:11px;
+  padding:10px 12px;height:180px;overflow-y:auto;border-radius:4px;margin-top:12px;line-height:1.6}
+.sat-log .ok{color:#a6e3a1}.sat-log .warn{color:#f9e2af}.sat-log .err{color:#f38ba8}
 .alert{background:var(--abg);border:1px solid #FFCA28;border-radius:4px;
        padding:9px 14px;font-size:12px;color:var(--afg);
        display:flex;align-items:center;gap:8px;margin-top:8px}
@@ -372,6 +386,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
 </header>
 <div class="tabs">
   <div class="tab active" onclick="showTab('archivos')"    id="tab-archivos">&#128193; Archivos</div>
+  <div class="tab"        onclick="showTab('sat')"         id="tab-sat">&#128275; Descarga SAT</div>
   <div class="tab"        onclick="showTab('procesando')"  id="tab-procesando">&#9881;&#65039; Procesando</div>
   <div class="tab"        onclick="showTab('resultados')"  id="tab-resultados">&#128200; Resultados</div>
   <div class="tab"        onclick="showTab('entregables')" id="tab-entregables">&#128230; Entregables</div>
@@ -585,6 +600,77 @@ header{background:var(--az);color:#fff;padding:10px 20px;
   <div class="btn-row">
     <button class="btn danger" onclick="limpiar()">&#128260; Nuevo periodo</button>
   </div>
+</div>
+
+<!-- TAB SAT: Descarga automática del SAT -->
+<div class="panel" id="panel-sat">
+
+  <div class="card">
+    <div class="ctitle" style="color:#C00000">&#128275; Descarga automática de CFDIs del SAT</div>
+    <p style="font-size:12px;color:#555;margin-bottom:12px">
+      Descarga tus CFDIs directamente del SAT usando tu <strong>e.firma (FIEL)</strong>.
+      Solo necesitas el archivo <code>.cer</code>, el <code>.key</code> y la contraseña.
+    </p>
+
+    <!-- Certificados FIEL -->
+    <div class="sat-fiel-grid">
+      <div class="sat-fiel-zone" id="z-sat-cer" onclick="document.getElementById('inp-sat-cer').click()">
+        <input type="file" id="inp-sat-cer" accept=".cer,.CER" onchange="seleccionarFIEL(this,'cer')">
+        <label for="inp-sat-cer">
+          <div style="font-size:28px">&#128220;</div>
+          <div style="font-weight:600;margin:4px 0">Certificado .cer</div>
+          <div id="st-sat-cer" style="font-size:11px;color:#888">Sin archivo</div>
+        </label>
+      </div>
+      <div class="sat-fiel-zone" id="z-sat-key" onclick="document.getElementById('inp-sat-key').click()">
+        <input type="file" id="inp-sat-key" accept=".key,.KEY" onchange="seleccionarFIEL(this,'key')">
+        <label for="inp-sat-key">
+          <div style="font-size:28px">&#128274;</div>
+          <div style="font-weight:600;margin:4px 0">Llave privada .key</div>
+          <div id="st-sat-key" style="font-size:11px;color:#888">Sin archivo</div>
+        </label>
+      </div>
+    </div>
+
+    <!-- Contrasena -->
+    <div class="cfg-form" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:10px">
+      <div class="fld">
+        <label>Contrase&ntilde;a e.firma</label>
+        <input type="password" id="sat-pass" placeholder="Contrase&ntilde;a del certificado">
+      </div>
+      <div class="fld">
+        <label>Fecha inicio</label>
+        <input type="date" id="sat-fecha-ini">
+      </div>
+      <div class="fld">
+        <label>Fecha fin</label>
+        <input type="date" id="sat-fecha-fin">
+      </div>
+    </div>
+
+    <!-- Tipo de CFDIs a descargar -->
+    <div style="display:flex;gap:24px;margin-bottom:14px;font-size:13px">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="sat-emitidos" checked>
+        <strong>Emitidos</strong> &mdash; IVA Cobrado (empresa = emisor)
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="sat-recibidos" checked>
+        <strong>Recibidos</strong> &mdash; IVA Pagado (empresa = receptor)
+      </label>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn" id="btn-sat" onclick="descargarSAT()">&#9654; Descargar CFDIs del SAT</button>
+    </div>
+  </div>
+
+  <!-- Progreso de descarga SAT -->
+  <div class="card" id="sat-progress-card">
+    <div class="ctitle">Progreso de descarga SAT</div>
+    <div class="sat-log" id="sat-logbox"></div>
+  </div>
+
 </div>
 
 </div><!-- .content -->
@@ -836,6 +922,87 @@ function manejarSSE(e){
   } else if(linea.startsWith('DONE')){
     if(sse){sse.close();sse=null;}
   } else if(linea.trim()){log(linea,'');}
+}
+
+// ─── SAT FIEL selección ───────────────────────────────────────────────────
+const satFiles = {cer: null, key: null};
+function seleccionarFIEL(inp, tipo){
+  const f = inp.files[0];
+  if(!f) return;
+  satFiles[tipo] = f;
+  document.getElementById('st-sat-'+tipo).textContent = f.name;
+  document.getElementById('z-sat-'+tipo).classList.add('ok');
+}
+
+// ─── SAT download ─────────────────────────────────────────────────────────
+let sseSAT = null;
+async function descargarSAT(){
+  const btn = document.getElementById('btn-sat');
+  const logbox = document.getElementById('sat-logbox');
+
+  if(!satFiles.cer || !satFiles.key){
+    satLogMsg('ERROR: Selecciona los archivos .cer y .key de tu e.firma','err');
+    return;
+  }
+  const pass = document.getElementById('sat-pass').value;
+  if(!pass){ satLogMsg('ERROR: Ingresa la contraseña de tu e.firma','err'); return; }
+  const fechaIni = document.getElementById('sat-fecha-ini').value;
+  const fechaFin = document.getElementById('sat-fecha-fin').value;
+  if(!fechaIni || !fechaFin){ satLogMsg('ERROR: Selecciona el rango de fechas','err'); return; }
+  const emitidos  = document.getElementById('sat-emitidos').checked;
+  const recibidos = document.getElementById('sat-recibidos').checked;
+  if(!emitidos && !recibidos){ satLogMsg('ERROR: Selecciona al menos un tipo (emitidos o recibidos)','err'); return; }
+
+  btn.disabled = true;
+  btn.textContent = '... Descargando';
+  logbox.innerHTML = '';
+  document.getElementById('sat-progress-card').style.display = '';
+
+  const fd = new FormData();
+  fd.append('cer_file', satFiles.cer);
+  fd.append('key_file', satFiles.key);
+  fd.append('password', pass);
+  fd.append('fecha_ini', fechaIni);
+  fd.append('fecha_fin', fechaFin);
+  fd.append('emitidos',  emitidos  ? '1' : '0');
+  fd.append('recibidos', recibidos ? '1' : '0');
+
+  const r = await fetch('/descargar_sat', {method:'POST', body:fd, headers:{'X-Sid':SID}});
+  const d = await r.json();
+  if(!d.ok){ satLogMsg('ERROR: '+d.error,'err'); btn.disabled=false; btn.textContent='\u25BA Descargar CFDIs del SAT'; return; }
+
+  // SSE para progreso
+  if(sseSAT) sseSAT.close();
+  sseSAT = new EventSource('/progreso_sat?sid='+SID);
+  sseSAT.onmessage = function(e){
+    const linea = e.data;
+    if(linea.startsWith('RESULTADO_SAT:OK')){
+      satLogMsg('Descarga completada. Ve a la pestaña Archivos para procesar.','ok');
+      sseSAT.close(); sseSAT=null;
+      btn.disabled=false; btn.innerHTML='&#9654; Descargar CFDIs del SAT';
+      actualizarEstado();
+    } else if(linea.startsWith('ERROR:')){
+      satLogMsg(linea.substring(6),'err');
+      sseSAT.close(); sseSAT=null;
+      btn.disabled=false; btn.innerHTML='&#9654; Descargar CFDIs del SAT';
+    } else if(linea === 'DONE'){
+      sseSAT.close(); sseSAT=null;
+      btn.disabled=false; btn.innerHTML='&#9654; Descargar CFDIs del SAT';
+    } else if(linea.trim()){
+      satLogMsg(linea, linea.includes('ERROR') ? 'err' : linea.includes('OK') ? 'ok' : '');
+    }
+  };
+  sseSAT.onerror = function(){ if(sseSAT){sseSAT.close();sseSAT=null;} };
+}
+
+function satLogMsg(msg, cls){
+  const box = document.getElementById('sat-logbox');
+  const el = document.createElement('div');
+  const t = new Date().toLocaleTimeString('es-MX',{hour12:false});
+  el.textContent = '['+t+'] '+msg;
+  if(cls) el.className = cls;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
 }
 </script>
 </body>
@@ -1225,6 +1392,211 @@ def limpiar():
         except Exception:
             pass
     return jsonify({"ok": True})
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SAT Descarga Masiva
+# ══════════════════════════════════════════════════════════════════════════
+
+def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
+                         key_bytes: bytes, password: str,
+                         fecha_ini, fecha_fin,
+                         emitidos: bool, recibidos: bool):
+    """Background thread: descarga CFDIs tipo P del SAT usando FIEL."""
+    import zipfile as _zipfile, io as _io
+    log_path = base_dir / "sat_download.log"
+
+    def _log(msg: str):
+        with open(log_path, "a", encoding="utf-8") as _fh:
+            _fh.write(msg + "\n")
+
+    _log(f"Inicio descarga SAT: {fecha_ini} a {fecha_fin}")
+    try:
+        try:
+            from satcfdi.models import Signer
+            from satcfdi.pacs.sat import SAT, TipoDescargaMasivaTerceros
+        except ImportError:
+            _log("ERROR:satcfdi no está instalado en este servidor")
+            return
+
+        _log("Cargando certificado e.firma...")
+        try:
+            pwd = password.encode("utf-8") if isinstance(password, str) else password
+            signer = Signer.load(certificate=cer_bytes, key=key_bytes, password=pwd)
+            _log(f"OK RFC detectado: {signer.rfc}")
+        except Exception as exc:
+            _log(f"ERROR:No se pudo cargar el certificado e.firma: {exc}")
+            return
+
+        sat_svc = SAT(signer=signer)
+
+        def _extract_tipo_p(data: bytes, out_dir: Path) -> int:
+            """Extrae XMLs tipo P de un ZIP y los guarda en out_dir."""
+            count = 0
+            try:
+                with _zipfile.ZipFile(_io.BytesIO(data)) as zf:
+                    for name in zf.namelist():
+                        if not name.lower().endswith(".xml"):
+                            continue
+                        xml_bytes = zf.read(name)
+                        if (b'TipoDeComprobante="P"' in xml_bytes or
+                                b"TipoDeComprobante='P'" in xml_bytes):
+                            dest = out_dir / Path(name).name
+                            dest.write_bytes(xml_bytes)
+                            count += 1
+            except Exception as exc2:
+                _log(f"ADVERTENCIA: error extrayendo paquete: {exc2}")
+            return count
+
+        if emitidos:
+            _log("Solicitando CFDIs emitidos (IVA Cobrado) al SAT...")
+            cobro_dir = base_dir / "input" / "cfdi_cobro"
+            total_e = 0
+            paq = 0
+            try:
+                for _, data in sat_svc.recover_comprobante_iwait(
+                    fecha_inicial=fecha_ini, fecha_final=fecha_fin,
+                    rfc_emisor=signer.rfc,
+                    tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
+                ):
+                    paq += 1
+                    n = _extract_tipo_p(data, cobro_dir)
+                    total_e += n
+                    _log(f"Paquete emitidos {paq}: {n} CFDIs tipo P guardados")
+            except Exception as exc:
+                _log(f"ADVERTENCIA emitidos: {exc}")
+            _log(f"OK Total emitidos (tipo P): {total_e} archivos en cfdi_cobro/")
+
+        if recibidos:
+            _log("Solicitando CFDIs recibidos (IVA Pagado) al SAT...")
+            pago_dir = base_dir / "input" / "cfdi_pago"
+            total_r = 0
+            paq = 0
+            try:
+                for _, data in sat_svc.recover_comprobante_iwait(
+                    fecha_inicial=fecha_ini, fecha_final=fecha_fin,
+                    rfc_receptor=signer.rfc,
+                    tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
+                ):
+                    paq += 1
+                    n = _extract_tipo_p(data, pago_dir)
+                    total_r += n
+                    _log(f"Paquete recibidos {paq}: {n} CFDIs tipo P guardados")
+            except Exception as exc:
+                _log(f"ADVERTENCIA recibidos: {exc}")
+            _log(f"OK Total recibidos (tipo P): {total_r} archivos en cfdi_pago/")
+
+        _log("RESULTADO_SAT:OK")
+
+    except Exception as exc:
+        import traceback
+        _log(f"ERROR:{exc}\n{traceback.format_exc()}")
+    finally:
+        with _sat_threads_lock:
+            _sat_threads.pop(sid, None)
+
+
+@app.route("/descargar_sat", methods=["POST"])
+def descargar_sat():
+    sid = _sid_from_request()
+    if not _check_sid(sid):
+        return jsonify({"ok": False, "error": "sid invalido"}), 400
+
+    with _sat_threads_lock:
+        if sid in _sat_threads and _sat_threads[sid].is_alive():
+            return jsonify({"ok": False, "error": "Descarga ya en curso"})
+
+    cer_f = request.files.get("cer_file")
+    key_f = request.files.get("key_file")
+    if not cer_f or not key_f:
+        return jsonify({"ok": False, "error": "Falta archivo .cer o .key"}), 400
+
+    password   = request.form.get("password", "")
+    fecha_ini_s = request.form.get("fecha_ini", "")
+    fecha_fin_s = request.form.get("fecha_fin", "")
+    emitidos   = request.form.get("emitidos", "0") == "1"
+    recibidos  = request.form.get("recibidos", "0") == "1"
+
+    try:
+        import datetime as _dt
+        fecha_ini = _dt.date.fromisoformat(fecha_ini_s)
+        fecha_fin = _dt.date.fromisoformat(fecha_fin_s)
+    except Exception:
+        return jsonify({"ok": False, "error": "Fechas inválidas (use YYYY-MM-DD)"}), 400
+
+    cer_bytes = cer_f.read()
+    key_bytes = key_f.read()
+    base_dir  = _session_dir(sid)
+
+    # Limpiar log anterior
+    (base_dir / "sat_download.log").write_text("", encoding="utf-8")
+
+    t = threading.Thread(
+        target=_sat_download_worker,
+        args=(sid, base_dir, cer_bytes, key_bytes, password,
+              fecha_ini, fecha_fin, emitidos, recibidos),
+        daemon=True,
+    )
+    with _sat_threads_lock:
+        _sat_threads[sid] = t
+    t.start()
+    return jsonify({"ok": True})
+
+
+@app.route("/progreso_sat")
+def progreso_sat():
+    """SSE: transmite sat_download.log en tiempo real."""
+    sid = _sid_from_request()
+    if not _check_sid(sid):
+        return Response("", status=400)
+
+    base_dir  = _session_dir(sid)
+    log_path  = base_dir / "sat_download.log"
+
+    def _generar():
+        for _ in range(80):
+            if log_path.exists():
+                break
+            time.sleep(0.1)
+        else:
+            yield "data: ERROR:No se encontró proceso de descarga activo\n\n"
+            return
+
+        offset = 0
+        done   = False
+        while not done:
+            try:
+                content = log_path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                content = ""
+
+            nuevas = content[offset:]
+            offset = len(content)
+
+            for linea in nuevas.splitlines():
+                linea = linea.strip()
+                if not linea:
+                    continue
+                yield f"data: {linea}\n\n"
+                if linea.startswith("RESULTADO_SAT:") or linea.startswith("ERROR:"):
+                    done = True
+
+            # Verificar si el thread terminó
+            with _sat_threads_lock:
+                vivo = sid in _sat_threads and _sat_threads[sid].is_alive()
+            if not vivo and not nuevas:
+                done = True
+
+            if not done:
+                time.sleep(0.5)
+
+        yield "data: DONE\n\n"
+
+    return Response(
+        stream_with_context(_generar()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════

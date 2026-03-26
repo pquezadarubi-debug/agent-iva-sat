@@ -1216,7 +1216,7 @@ def generar_excel(registros: list, movimientos: list,
     ws2.append([])
     _res_enc("IVA")
     _res_fila("IVA 16% total en CFDIs", f"${iva_total:,.2f}")
-    _res_fila("IVA acreditable confirmado (cruce edo. cuenta)", f"${iva_confirma:,.2f}")
+    _res_fila("SALDO A FAVOR A SOLICITAR (cruce edo. cuenta)", f"${iva_confirma:,.2f}")
     ws2.append([])
     _res_enc("CRUCES")
     pct_cobertura = (cruce_completo / max(total_facturas, 1)) * 100
