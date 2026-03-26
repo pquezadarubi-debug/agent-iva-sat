@@ -83,9 +83,10 @@ def progreso(paso: str, pct: int, msg: str):
     print(f"PROGRESO:{paso}:{pct}:{msg}", flush=True)
 
 
-def resultado(total_cfdis, iva_confirmado, cruces_completos, sin_cruce):
+def resultado(total_cfdis, iva_confirmado, cruces_completos, sin_cruce,
+              iva_trasladado=0.0, iva_acreditable=0.0, saldo_favor=0.0):
     """Emite línea de resultado final."""
-    print(f"RESULTADO:{total_cfdis}:{iva_confirmado:.2f}:{cruces_completos}:{sin_cruce}", flush=True)
+    print(f"RESULTADO:{total_cfdis}:{iva_confirmado:.2f}:{cruces_completos}:{sin_cruce}:{iva_trasladado:.2f}:{iva_acreditable:.2f}:{saldo_favor:.2f}", flush=True)
 
 
 def error(msg: str):
@@ -122,13 +123,15 @@ def cargar_config(base_dir: Path) -> dict:
 # PASO 2 — PARSEO DE CFDIs COMPLEMENTO DE PAGO
 # ══════════════════════════════════════════════════════════════════════════════
 
-def parsear_cfdis(base_dir: Path) -> tuple[list, list]:
+def parsear_cfdis(base_dir: Path, carpeta: str = "cfdi") -> tuple[list, list]:
     """
-    Lee todos los XMLs en input/cfdi/.
+    Lee todos los XMLs en input/{carpeta}/.
     Retorna (registros, errores).
     Cada registro es un dict con datos del pago y sus DoctoRelacionados.
     """
-    cfdi_dir = base_dir / "input" / "cfdi"
+    cfdi_dir = base_dir / "input" / carpeta
+    if not cfdi_dir.exists():
+        return [], []
     archivos = list(cfdi_dir.glob("*.xml")) + list(cfdi_dir.glob("*.XML"))
     registros = []
     errores = []
@@ -1425,10 +1428,18 @@ def main():
     periodo_str = hoy.strftime("%Y%m")
 
     # ── PASO 2: Parseo CFDIs ────────────────────────────────────────────────
-    registros, errores_cfdi = parsear_cfdis(base_dir)
-    if registros:
-        # Detectar periodo del primer CFDI
-        fechas = [r["fecha_pago"] for r in registros if r["fecha_pago"]]
+    # CFDIs de PAGO (proveedor es emisor) → IVA acreditable
+    progreso("cfdi", 0, "Parseando CFDIs de pago...")
+    registros_pago, errores_pago = parsear_cfdis(base_dir, carpeta="cfdi")
+    # CFDIs de COBRO (nuestra empresa es emisora) → IVA trasladado
+    progreso("cfdi", 50, "Parseando CFDIs de cobro...")
+    registros_cobro, errores_cobro = parsear_cfdis(base_dir, carpeta="cfdi_cobro")
+    errores_cfdi = errores_pago + errores_cobro
+    # Para el procesamiento principal usamos los de pago
+    registros = registros_pago
+    todos_registros = registros_pago + registros_cobro
+    if todos_registros:
+        fechas = [r["fecha_pago"] for r in todos_registros if r["fecha_pago"]]
         if fechas:
             try:
                 dt = datetime.datetime.strptime(sorted(fechas)[-1], "%Y-%m-%d")
@@ -1482,7 +1493,12 @@ def main():
     debiles_n       = sum(1 for r in registros if "débil" in r["metodo_cruce"].lower()
                           or "SOLO_MONTO" in r["metodo_cruce"])
 
-    resultado(total_cfdis_cp, iva_confirmado, triple_n, sin_cruce_n)
+    iva_acreditable = sum(r["iva16_mxn"] for r in registros_pago)
+    iva_trasladado  = sum(r["iva16_mxn"] for r in registros_cobro)
+    saldo_favor     = iva_trasladado - iva_acreditable
+
+    resultado(total_cfdis_cp, iva_confirmado, triple_n, sin_cruce_n,
+              iva_trasladado, iva_acreditable, saldo_favor)
 
     print("\n" + "-" * 60, flush=True)
     print(f"[OK] CFDIs Complemento de Pago procesados   : {total_cfdis_cp}", flush=True)

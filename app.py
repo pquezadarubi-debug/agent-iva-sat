@@ -55,7 +55,7 @@ def _set_sid(response: Response, sid: str) -> Response:
 
 def _session_dir(sid: str) -> Path:
     d = SESSIONS_DIR / sid
-    for sub in ["input/cfdi", "input/estado_cuenta",
+    for sub in ["input/cfdi", "input/cfdi_cobro", "input/estado_cuenta",
                 "input/auxiliar", "input/machote", "output"]:
         (d / sub).mkdir(parents=True, exist_ok=True)
     return d
@@ -222,15 +222,26 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     <div class="ctitle">1 — Sube tus archivos</div>
     <div class="upload-grid">
 
-      <!-- CFDIs XML -->
+      <!-- CFDIs de PAGO (IVA Acreditable) -->
       <div class="uzone" id="z-cfdi" ondragover="drag(event,'cfdi')"
            ondragleave="undrag('cfdi')" ondrop="drop(event,'cfdi')">
         <input type="file" multiple accept=".xml,.XML"
                onchange="subirMultiple(this,'cfdi')" id="inp-cfdi">
         <div class="uicon">&#128196;</div>
-        <div class="ulabel">CFDIs Complemento de Pago</div>
-        <div class="usub">Arrastra o haz clic &mdash; .xml (varios)</div>
+        <div class="ulabel">CFDIs de PAGO <span style="font-size:10px;color:#888">(IVA Acreditable)</span></div>
+        <div class="usub">Emisor = proveedor &mdash; .xml (varios)</div>
         <div class="ust" id="st-cfdi">Sin archivos</div>
+      </div>
+
+      <!-- CFDIs de COBRO (IVA Trasladado) -->
+      <div class="uzone" id="z-cfdi_cobro" ondragover="drag(event,'cfdi_cobro')"
+           ondragleave="undrag('cfdi_cobro')" ondrop="drop(event,'cfdi_cobro')">
+        <input type="file" multiple accept=".xml,.XML"
+               onchange="subirMultiple(this,'cfdi_cobro')" id="inp-cfdi_cobro">
+        <div class="uicon">&#128196;</div>
+        <div class="ulabel">CFDIs de COBRO <span style="font-size:10px;color:#888">(IVA Trasladado)</span></div>
+        <div class="usub">Emisor = tu empresa &mdash; .xml (varios)</div>
+        <div class="ust" id="st-cfdi_cobro">Sin archivos</div>
       </div>
 
       <!-- Estado de cuenta PDF -->
@@ -327,6 +338,17 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     <div class="mc v"><div class="mv" id="m-cru">0 / 0</div><div class="ml">CFDIs con cruce completo</div></div>
     <div class="mc a"><div class="mv" id="m-par">0</div><div class="ml">Cruce parcial &mdash; revisar</div></div>
     <div class="mc r"><div class="mv" id="m-sin">0</div><div class="ml">Sin cruce &mdash; accion requerida</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">
+    <div class="mc" style="background:#EBF3FC;border-left:4px solid #2E75B6">
+      <div class="mv" id="m-trasl" style="color:#1F4E79;font-size:18px">$0.00</div>
+      <div class="ml">IVA Trasladado (cobrado)</div></div>
+    <div class="mc" style="background:#FFF2CC;border-left:4px solid #FFC107">
+      <div class="mv" id="m-acred" style="color:#7F6000;font-size:18px">$0.00</div>
+      <div class="ml">IVA Acreditable (pagado)</div></div>
+    <div class="mc v">
+      <div class="mv" id="m-saldo" style="font-size:18px">$0.00</div>
+      <div class="ml">Saldo a Favor = Cobrado &minus; Pagado</div></div>
   </div>
   <div id="al-sin" class="alert hidden">&#9888;&#65039; <strong>Atencion:</strong> hay movimientos sin cruce que requieren revision manual.</div>
   <div class="card">
@@ -513,7 +535,8 @@ function iniciar(){
           const p=linea.split(':'); if(p.length>=4) upd(p[1],p[2],p[3]);
         } else if(linea.startsWith('RESULTADO:')){
           const p=linea.split(':');
-          if(p.length>=5) finProceso({total:p[1],iva:p[2],cruces:p[3],sin_cruce:p[4]});
+          if(p.length>=5) finProceso({total:p[1],iva:p[2],cruces:p[3],sin_cruce:p[4],
+            trasladado:p[5]||'0',acreditable:p[6]||'0',saldo:p[7]||'0'});
         } else if(linea.startsWith('ERROR:')){
           log(linea.substring(6),'err');
           sse.close(); sse=null;
@@ -540,6 +563,10 @@ function finProceso(d){
   const ok=parseInt(d.cruces)||0, sinc=parseInt(d.sin_cruce)||0;
   const parc=Math.max(0,total-ok-sinc);
   document.getElementById('m-iva').textContent='$'+iva.toLocaleString('es-MX',{minimumFractionDigits:2});
+  const trasl=parseFloat(d.trasladado)||0, acred=parseFloat(d.acreditable)||0, saldo=parseFloat(d.saldo)||0;
+  document.getElementById('m-trasl').textContent='$'+trasl.toLocaleString('es-MX',{minimumFractionDigits:2});
+  document.getElementById('m-acred').textContent='$'+acred.toLocaleString('es-MX',{minimumFractionDigits:2});
+  document.getElementById('m-saldo').textContent='$'+saldo.toLocaleString('es-MX',{minimumFractionDigits:2});
   document.getElementById('m-cru').textContent=ok+' / '+total+(total>0?' ('+Math.round(ok/total*100)+'%)':'');
   document.getElementById('m-par').textContent=parc;
   document.getElementById('m-sin').textContent=sinc;
@@ -601,6 +628,7 @@ def _check_sid(sid: str) -> bool:
 
 ALLOWED_EXT = {
     "cfdi":        {".xml"},
+    "cfdi_cobro":  {".xml"},
     "pdf":         {".pdf"},
     "sap":         {".xlsx", ".xls"},
     "machote":     {".docx"},
@@ -643,10 +671,11 @@ def upload():
 
     base = _session_dir(sid)
     destdir_map = {
-        "cfdi":    base / "input" / "cfdi",
-        "pdf":     base / "input" / "estado_cuenta",
-        "sap":     base / "input" / "auxiliar",
-        "machote": base / "input" / "machote",
+        "cfdi":       base / "input" / "cfdi",
+        "cfdi_cobro": base / "input" / "cfdi_cobro",
+        "pdf":        base / "input" / "estado_cuenta",
+        "sap":        base / "input" / "auxiliar",
+        "machote":    base / "input" / "machote",
     }
     nombre = secure_filename(f.filename)
     dest   = destdir_map[tipo] / nombre
@@ -672,16 +701,18 @@ def estado():
     if not _check_sid(sid):
         return jsonify({"cfdi": 0, "pdf": 0, "sap": 0, "machote": False})
     base = _session_dir(sid)
-    cfdi_dir = base / "input" / "cfdi"
-    pdf_dir  = base / "input" / "estado_cuenta"
-    sap_dir  = base / "input" / "auxiliar"
-    doc_dir  = base / "input" / "machote"
+    cfdi_dir       = base / "input" / "cfdi"
+    cfdi_cobro_dir = base / "input" / "cfdi_cobro"
+    pdf_dir        = base / "input" / "estado_cuenta"
+    sap_dir        = base / "input" / "auxiliar"
+    doc_dir        = base / "input" / "machote"
     return jsonify({
-        "cfdi":    len(list(cfdi_dir.glob("*.xml")) + list(cfdi_dir.glob("*.XML"))),
-        "pdf":     len(list(pdf_dir.glob("*.pdf"))  + list(pdf_dir.glob("*.PDF"))),
-        "sap":     len(list(sap_dir.glob("*.xlsx")) + list(sap_dir.glob("*.xls")) +
-                       list(sap_dir.glob("*.XLSX"))),
-        "machote": bool(list(doc_dir.glob("*.docx"))),
+        "cfdi":       len(list(cfdi_dir.glob("*.xml")) + list(cfdi_dir.glob("*.XML"))),
+        "cfdi_cobro": len(list(cfdi_cobro_dir.glob("*.xml")) + list(cfdi_cobro_dir.glob("*.XML"))),
+        "pdf":        len(list(pdf_dir.glob("*.pdf"))  + list(pdf_dir.glob("*.PDF"))),
+        "sap":        len(list(sap_dir.glob("*.xlsx")) + list(sap_dir.glob("*.xls")) +
+                          list(sap_dir.glob("*.XLSX"))),
+        "machote":    bool(list(doc_dir.glob("*.docx"))),
     })
 
 
