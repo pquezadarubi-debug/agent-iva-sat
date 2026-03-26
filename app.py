@@ -55,8 +55,11 @@ def _set_sid(response: Response, sid: str) -> Response:
 
 def _session_dir(sid: str) -> Path:
     d = SESSIONS_DIR / sid
-    for sub in ["input/cfdi", "input/cfdi_cobro", "input/estado_cuenta",
-                "input/auxiliar", "input/machote", "output"]:
+    for sub in ["input/cfdi_cobro", "input/cfdi_pago", "input/aux_cobrado",
+                "input/aux_pagado", "input/pdf_bancos", "input/aux_bancos",
+                "input/machote", "output",
+                # legacy folders for backwards compat
+                "input/cfdi", "input/estado_cuenta", "input/auxiliar"]:
         (d / sub).mkdir(parents=True, exist_ok=True)
     return d
 
@@ -218,65 +221,94 @@ header{background:var(--az);color:#fff;padding:10px 20px;
 <!-- TAB 1 ARCHIVOS -->
 <div class="panel active" id="panel-archivos">
 
+  <!-- SECCION 1: IVA COBRADO -->
   <div class="card">
-    <div class="ctitle">1 — Sube tus archivos</div>
+    <div class="ctitle" style="color:#1F4E79">&#128200; IVA Cobrado &mdash; Trasladado</div>
     <div class="upload-grid">
-
-      <!-- CFDIs de PAGO (IVA Acreditable) -->
-      <div class="uzone" id="z-cfdi" ondragover="drag(event,'cfdi')"
-           ondragleave="undrag('cfdi')" ondrop="drop(event,'cfdi')">
+      <div class="uzone" id="z-cfdi-cobro" ondragover="drag(event,'cfdi-cobro')"
+           ondragleave="undrag('cfdi-cobro')" ondrop="drop(event,'cfdi-cobro')">
         <input type="file" multiple accept=".xml,.XML"
-               onchange="subirMultiple(this,'cfdi')" id="inp-cfdi">
+               onchange="subirMultiple(this,'cfdi-cobro')" id="inp-cfdi-cobro">
         <div class="uicon">&#128196;</div>
-        <div class="ulabel">CFDIs de PAGO <span style="font-size:10px;color:#888">(IVA Acreditable)</span></div>
-        <div class="usub">Emisor = proveedor &mdash; .xml (varios)</div>
-        <div class="ust" id="st-cfdi">Sin archivos</div>
-      </div>
-
-      <!-- CFDIs de COBRO (IVA Trasladado) -->
-      <div class="uzone" id="z-cfdi_cobro" ondragover="drag(event,'cfdi_cobro')"
-           ondragleave="undrag('cfdi_cobro')" ondrop="drop(event,'cfdi_cobro')">
-        <input type="file" multiple accept=".xml,.XML"
-               onchange="subirMultiple(this,'cfdi_cobro')" id="inp-cfdi_cobro">
-        <div class="uicon">&#128196;</div>
-        <div class="ulabel">CFDIs de COBRO <span style="font-size:10px;color:#888">(IVA Trasladado)</span></div>
+        <div class="ulabel">CFDIs de Cobro</div>
         <div class="usub">Emisor = tu empresa &mdash; .xml (varios)</div>
-        <div class="ust" id="st-cfdi_cobro">Sin archivos</div>
+        <div class="ust" id="st-cfdi-cobro">Sin archivos</div>
       </div>
-
-      <!-- Estado de cuenta PDF -->
-      <div class="uzone" id="z-pdf" ondragover="drag(event,'pdf')"
-           ondragleave="undrag('pdf')" ondrop="drop(event,'pdf')">
-        <input type="file" multiple accept=".pdf,.PDF"
-               onchange="subirMultiple(this,'pdf')" id="inp-pdf">
-        <div class="uicon">&#128203;</div>
-        <div class="ulabel">Estado(s) de cuenta bancario</div>
-        <div class="usub">Arrastra o haz clic &mdash; .pdf (uno o varios)</div>
-        <div class="ust" id="st-pdf">Sin archivos</div>
-      </div>
-
-      <!-- Auxiliar SAP -->
-      <div class="uzone" id="z-sap" ondragover="drag(event,'sap')"
-           ondragleave="undrag('sap')" ondrop="drop(event,'sap')">
-        <input type="file" accept=".xlsx,.xls,.XLSX,.XLS"
-               onchange="subirUno(this,'sap')" id="inp-sap">
+      <div class="uzone" id="z-aux-cobrado" ondragover="drag(event,'aux-cobrado')"
+           ondragleave="undrag('aux-cobrado')" ondrop="drop(event,'aux-cobrado')">
+        <input type="file" multiple accept=".xlsx,.xls,.XLSX,.XLS"
+               onchange="subirMultiple(this,'aux-cobrado')" id="inp-aux-cobrado">
         <div class="uicon">&#128202;</div>
-        <div class="ulabel">Auxiliar SAP (IVA Acreditable)</div>
-        <div class="usub">Arrastra o haz clic &mdash; .xlsx</div>
-        <div class="ust" id="st-sap">Sin archivo</div>
+        <div class="ulabel">Auxiliar SAP IVA Cobrado</div>
+        <div class="usub">Auxiliar contable IVA trasladado &mdash; .xlsx</div>
+        <div class="ust" id="st-aux-cobrado">Sin archivos</div>
       </div>
+    </div>
+  </div>
 
-      <!-- Machote Word (opcional) -->
+  <!-- SECCION 2: IVA PAGADO -->
+  <div class="card">
+    <div class="ctitle" style="color:#7F6000">&#128199; IVA Pagado &mdash; Acreditable</div>
+    <div class="upload-grid">
+      <div class="uzone" id="z-cfdi-pago" ondragover="drag(event,'cfdi-pago')"
+           ondragleave="undrag('cfdi-pago')" ondrop="drop(event,'cfdi-pago')">
+        <input type="file" multiple accept=".xml,.XML"
+               onchange="subirMultiple(this,'cfdi-pago')" id="inp-cfdi-pago">
+        <div class="uicon">&#128196;</div>
+        <div class="ulabel">CFDIs de Pago</div>
+        <div class="usub">Emisor = proveedor &mdash; .xml (varios)</div>
+        <div class="ust" id="st-cfdi-pago">Sin archivos</div>
+      </div>
+      <div class="uzone" id="z-aux-pagado" ondragover="drag(event,'aux-pagado')"
+           ondragleave="undrag('aux-pagado')" ondrop="drop(event,'aux-pagado')">
+        <input type="file" multiple accept=".xlsx,.xls,.XLSX,.XLS"
+               onchange="subirMultiple(this,'aux-pagado')" id="inp-aux-pagado">
+        <div class="uicon">&#128202;</div>
+        <div class="ulabel">Auxiliar SAP IVA Pagado</div>
+        <div class="usub">Auxiliar contable IVA acreditable &mdash; .xlsx</div>
+        <div class="ust" id="st-aux-pagado">Sin archivos</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECCION 3: BANCOS -->
+  <div class="card">
+    <div class="ctitle" style="color:#375623">&#127981; Bancos</div>
+    <div class="upload-grid">
+      <div class="uzone" id="z-pdf-bancos" ondragover="drag(event,'pdf-bancos')"
+           ondragleave="undrag('pdf-bancos')" ondrop="drop(event,'pdf-bancos')">
+        <input type="file" multiple accept=".pdf,.PDF"
+               onchange="subirMultiple(this,'pdf-bancos')" id="inp-pdf-bancos">
+        <div class="uicon">&#128203;</div>
+        <div class="ulabel">Estados de Cuenta Bancarios</div>
+        <div class="usub">PDF bancarios &mdash; .pdf (varios)</div>
+        <div class="ust" id="st-pdf-bancos">Sin archivos</div>
+      </div>
+      <div class="uzone" id="z-aux-bancos" ondragover="drag(event,'aux-bancos')"
+           ondragleave="undrag('aux-bancos')" ondrop="drop(event,'aux-bancos')">
+        <input type="file" multiple accept=".xlsx,.xls,.XLSX,.XLS"
+               onchange="subirMultiple(this,'aux-bancos')" id="inp-aux-bancos">
+        <div class="uicon">&#128202;</div>
+        <div class="ulabel">Auxiliar Contable Bancos</div>
+        <div class="usub">Cargos (cobros) y abonos (pagos) &mdash; .xlsx</div>
+        <div class="ust" id="st-aux-bancos">Sin archivos</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Machote Word (opcional) -->
+  <div class="card">
+    <div class="ctitle">Machote Word <em style="font-weight:normal">(opcional)</em></div>
+    <div class="upload-grid" style="grid-template-columns:1fr 1fr">
       <div class="uzone" id="z-machote" ondragover="drag(event,'machote')"
            ondragleave="undrag('machote')" ondrop="drop(event,'machote')">
         <input type="file" accept=".docx,.DOCX"
                onchange="subirUno(this,'machote')" id="inp-machote">
         <div class="uicon">&#128221;</div>
-        <div class="ulabel">Machote Word <em>(opcional)</em></div>
-        <div class="usub">Arrastra o haz clic &mdash; .docx</div>
+        <div class="ulabel">Machote Word</div>
+        <div class="usub">Plantilla escrito SAT &mdash; .docx</div>
         <div class="ust" id="st-machote">Opcional</div>
       </div>
-
     </div>
   </div>
 
@@ -467,10 +499,13 @@ async function guardarConfig(){
 // ─── Estado inicial ───────────────────────────────────────────────────────
 async function actualizarEstado(){
   const d = await (await fetch('/estado',{headers:{'X-Sid':SID}})).json();
-  setZone('cfdi',    d.cfdi,    d.cfdi+' XML');
-  setZone('pdf',     d.pdf,     d.pdf+' PDF');
-  setZone('sap',     d.sap,     d.sap+' Excel');
-  setZone('machote', d.machote, d.machote ? 'Cargado' : 'Opcional', true);
+  setZone('cfdi-cobro',  d.cfdi_cobro,  d.cfdi_cobro+' XML');
+  setZone('cfdi-pago',   d.cfdi_pago,   d.cfdi_pago+' XML');
+  setZone('aux-cobrado', d.aux_cobrado, d.aux_cobrado+' Excel');
+  setZone('aux-pagado',  d.aux_pagado,  d.aux_pagado+' Excel');
+  setZone('pdf-bancos',  d.pdf_bancos,  d.pdf_bancos+' PDF');
+  setZone('aux-bancos',  d.aux_bancos,  d.aux_bancos+' Excel');
+  setZone('machote',     d.machote,     d.machote ? 'Cargado' : 'Opcional', true);
 }
 function setZone(z, n, txt, opcional){
   const el = document.getElementById('z-'+z);
@@ -627,10 +662,12 @@ def _check_sid(sid: str) -> bool:
 
 
 ALLOWED_EXT = {
-    "cfdi":        {".xml"},
-    "cfdi_cobro":  {".xml"},
-    "pdf":         {".pdf"},
-    "sap":         {".xlsx", ".xls"},
+    "cfdi-cobro":  {".xml"},
+    "cfdi-pago":   {".xml"},
+    "aux-cobrado": {".xlsx", ".xls"},
+    "aux-pagado":  {".xlsx", ".xls"},
+    "pdf-bancos":  {".pdf"},
+    "aux-bancos":  {".xlsx", ".xls"},
     "machote":     {".docx"},
 }
 
@@ -671,11 +708,13 @@ def upload():
 
     base = _session_dir(sid)
     destdir_map = {
-        "cfdi":       base / "input" / "cfdi",
-        "cfdi_cobro": base / "input" / "cfdi_cobro",
-        "pdf":        base / "input" / "estado_cuenta",
-        "sap":        base / "input" / "auxiliar",
-        "machote":    base / "input" / "machote",
+        "cfdi-cobro":  base / "input" / "cfdi_cobro",
+        "cfdi-pago":   base / "input" / "cfdi_pago",
+        "aux-cobrado": base / "input" / "aux_cobrado",
+        "aux-pagado":  base / "input" / "aux_pagado",
+        "pdf-bancos":  base / "input" / "pdf_bancos",
+        "aux-bancos":  base / "input" / "aux_bancos",
+        "machote":     base / "input" / "machote",
     }
     nombre = secure_filename(f.filename)
     dest   = destdir_map[tipo] / nombre
@@ -701,18 +740,17 @@ def estado():
     if not _check_sid(sid):
         return jsonify({"cfdi": 0, "pdf": 0, "sap": 0, "machote": False})
     base = _session_dir(sid)
-    cfdi_dir       = base / "input" / "cfdi"
-    cfdi_cobro_dir = base / "input" / "cfdi_cobro"
-    pdf_dir        = base / "input" / "estado_cuenta"
-    sap_dir        = base / "input" / "auxiliar"
-    doc_dir        = base / "input" / "machote"
+    def count_xml(d): return len(list(d.glob("*.xml")) + list(d.glob("*.XML")))
+    def count_xls(d): return len(list(d.glob("*.xlsx")) + list(d.glob("*.xls")) + list(d.glob("*.XLSX")))
+    def count_pdf(d): return len(list(d.glob("*.pdf")) + list(d.glob("*.PDF")))
     return jsonify({
-        "cfdi":       len(list(cfdi_dir.glob("*.xml")) + list(cfdi_dir.glob("*.XML"))),
-        "cfdi_cobro": len(list(cfdi_cobro_dir.glob("*.xml")) + list(cfdi_cobro_dir.glob("*.XML"))),
-        "pdf":        len(list(pdf_dir.glob("*.pdf"))  + list(pdf_dir.glob("*.PDF"))),
-        "sap":        len(list(sap_dir.glob("*.xlsx")) + list(sap_dir.glob("*.xls")) +
-                          list(sap_dir.glob("*.XLSX"))),
-        "machote":    bool(list(doc_dir.glob("*.docx"))),
+        "cfdi_cobro":  count_xml(base / "input" / "cfdi_cobro"),
+        "cfdi_pago":   count_xml(base / "input" / "cfdi_pago"),
+        "aux_cobrado": count_xls(base / "input" / "aux_cobrado"),
+        "aux_pagado":  count_xls(base / "input" / "aux_pagado"),
+        "pdf_bancos":  count_pdf(base / "input" / "pdf_bancos"),
+        "aux_bancos":  count_xls(base / "input" / "aux_bancos"),
+        "machote":     bool(list((base / "input" / "machote").glob("*.docx"))),
     })
 
 

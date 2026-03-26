@@ -402,11 +402,13 @@ def _parsear_texto_generico(texto_pagina: str, año: int) -> list:
 
 def leer_estado_cuenta(base_dir: Path) -> list:
     """
-    Lee PDFs en input/estado_cuenta/.
+    Lee PDFs en input/pdf_bancos/ (o input/estado_cuenta/ legacy).
     Retorna lista de movimientos con campos:
       fecha, descripcion, referencia, cargo, abono, saldo, cruce_*
     """
-    pdf_dir = base_dir / "input" / "estado_cuenta"
+    pdf_dir = base_dir / "input" / "pdf_bancos"
+    if not pdf_dir.exists() or not (list(pdf_dir.glob("*.pdf")) + list(pdf_dir.glob("*.PDF"))):
+        pdf_dir = base_dir / "input" / "estado_cuenta"
     pdfs    = list(pdf_dir.glob("*.pdf")) + list(pdf_dir.glob("*.PDF"))
     movimientos = []
     año_default = datetime.datetime.now().year
@@ -498,12 +500,16 @@ def leer_auxiliar_sap(base_dir: Path) -> tuple[pd.DataFrame | None, dict, list]:
     Lee el Excel de auxiliar SAP.
     Retorna (df_original, col_map, advertencias).
     """
-    aux_dir = base_dir / "input" / "auxiliar"
-    archivos = (list(aux_dir.glob("*.xlsx")) + list(aux_dir.glob("*.xls")) +
-                list(aux_dir.glob("*.XLSX")) + list(aux_dir.glob("*.XLS")))
-
+    # Buscar en aux_pagado (nuevo) o auxiliar (legacy)
+    def _xls(d): return (list(d.glob("*.xlsx")) + list(d.glob("*.xls")) +
+                         list(d.glob("*.XLSX")) + list(d.glob("*.XLS")))
+    aux_dir  = base_dir / "input" / "aux_pagado"
+    archivos = _xls(aux_dir)
     if not archivos:
-        return None, {}, ["No se encontró archivo Excel en input/auxiliar/"]
+        aux_dir  = base_dir / "input" / "auxiliar"
+        archivos = _xls(aux_dir)
+    if not archivos:
+        return None, {}, ["No se encontro archivo Excel en aux_pagado/ ni auxiliar/"]
 
     advertencias = []
     df = None
@@ -1430,7 +1436,7 @@ def main():
     # ── PASO 2: Parseo CFDIs ────────────────────────────────────────────────
     # CFDIs de PAGO (proveedor es emisor) → IVA acreditable
     progreso("cfdi", 0, "Parseando CFDIs de pago...")
-    registros_pago, errores_pago = parsear_cfdis(base_dir, carpeta="cfdi")
+    registros_pago, errores_pago = parsear_cfdis(base_dir, carpeta="cfdi_pago")
     # CFDIs de COBRO (nuestra empresa es emisora) → IVA trasladado
     progreso("cfdi", 50, "Parseando CFDIs de cobro...")
     registros_cobro, errores_cobro = parsear_cfdis(base_dir, carpeta="cfdi_cobro")
