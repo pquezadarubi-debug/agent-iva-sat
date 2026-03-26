@@ -289,6 +289,7 @@ def _extraer_referencia(texto: str) -> str:
 def _nuevo_movimiento(fecha, desc, ref, cargo, abono, saldo):
     return {"fecha": fecha, "descripcion": desc, "referencia": ref,
             "cargo": cargo, "abono": abono, "saldo": saldo,
+            "banco": "", "archivo_pdf": "",
             "id_cruce": "", "cruce_cfdi": False,
             "uuid_cfdi": "", "metodo_cruce": ""}
 
@@ -367,6 +368,139 @@ def _parsear_bloque_bbva(lineas: list, año: int) -> list:
     return movs
 
 
+_MESES_ES_NUM = {
+    "ENE": 1, "FEB": 2, "MAR": 3, "ABR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AGO": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DIC": 12,
+}
+
+_ENCABEZADOS_TABLA = {
+    "FECHA", "FOLIO", "DESCRIPCION", "DEPOSITO", "RETIRO", "SALDO",
+    "PRODUCTO", "CUENTA", "ANTERIOR", "ANTERIOR:", "FINAL:", "PERIODO",
+    "NUMERO", "DE", "MONEDA", "RFC", "SUCURSAL", "INTERESES", "ISR",
+    "COMISIONES", "GAT", "NOMINAL", "REAL", "RETENIDO", "NETOS", "BRUTOS",
+}
+
+
+def _detectar_banco(texto: str) -> str:
+    """Detecta el banco a partir del texto de la primera página del PDF."""
+    t = texto.upper()
+    if "BBVA" in t or "BANCOMER" in t:
+        return "BBVA"
+    if "SANTANDER" in t:
+        return "SANTANDER"
+    if "CITIBANAMEX" in t or "BANAMEX" in t:
+        return "BANAMEX"
+    if "BANORTE" in t:
+        return "BANORTE"
+    if "HSBC" in t:
+        return "HSBC"
+    if "SCOTIABANK" in t:
+        return "SCOTIABANK"
+    if "INBURSA" in t:
+        return "INBURSA"
+    return "DESCONOCIDO"
+
+
+def _parsear_santander_words(words: list, año: int) -> list:
+    """
+    Parser Santander MX usando coordenadas de palabras (fitz get_text("words")).
+    Formato: DD-MMM-YYYY | FOLIO | DESCRIPCION (multi-línea) | DEPOSITO | RETIRO | SALDO
+    Usa posición X para distinguir DEPOSITO vs RETIRO.
+    """
+    if not words:
+        return []
+
+    # Determinar ancho útil de la página
+    max_x = max(w[2] for w in words) if words else 600.0
+
+    # Umbrales de columnas Santander (% del ancho)
+    x_deposito = max_x * 0.60
+    x_retiro   = max_x * 0.75
+    x_saldo    = max_x * 0.88
+
+    # Agrupar palabras por línea (y0 con tolerancia ±3pt)
+    from collections import defaultdict
+    lineas_dict: dict = defaultdict(list)
+    for w in words:
+        x0, y0, x1, y1, text = w[0], w[1], w[2], w[3], w[4]
+        y_key = round(y0 / 3) * 3
+        lineas_dict[y_key].append((x0, text))
+
+    pat_fecha  = re.compile(
+        r'^(\d{1,2})-(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)-(\d{4})$',
+        re.IGNORECASE,
+    )
+    pat_monto  = re.compile(r'^[\d,]+\.\d{2}$')
+    pat_folio  = re.compile(r'^\d{1,7}$')
+
+    movs    = []
+    current = None
+
+    def _guardar(c):
+        if c:
+            movs.append(_nuevo_movimiento(
+                c["fecha"], c["desc"][:200],
+                c["ref"], c["cargo"], c["abono"], c["saldo"],
+            ))
+
+    for y in sorted(lineas_dict.keys()):
+        linea = sorted(lineas_dict[y], key=lambda w: w[0])
+        if not linea:
+            continue
+
+        first_x, first_word = linea[0]
+        m_fecha = pat_fecha.match(first_word)
+
+        if m_fecha:
+            _guardar(current)
+            dia  = int(m_fecha.group(1))
+            mes  = _MESES_ES_NUM.get(m_fecha.group(2).upper(), 1)
+            anio = int(m_fecha.group(3))
+            try:
+                fecha = datetime.date(anio, mes, dia).isoformat()
+            except Exception:
+                fecha = f"{anio}-{mes:02d}-{dia:02d}"
+
+            current = {"fecha": fecha, "ref": "", "desc": "",
+                       "cargo": 0.0, "abono": 0.0, "saldo": 0.0}
+
+            for x, word in linea[1:]:
+                if pat_monto.match(word):
+                    monto = _parsear_monto(word)
+                    if x >= x_saldo:
+                        current["saldo"] = monto
+                    elif x >= x_retiro:
+                        current["cargo"] = monto
+                    elif x >= x_deposito:
+                        current["abono"] = monto
+                    elif not current["ref"] and pat_folio.match(word):
+                        current["ref"] = word
+                    else:
+                        current["desc"] = (current["desc"] + " " + word).strip()
+                elif not current["ref"] and pat_folio.match(word):
+                    current["ref"] = word
+                else:
+                    current["desc"] = (current["desc"] + " " + word).strip()
+
+        elif current is not None:
+            # Línea de continuación — agregar a descripción / completar montos
+            for x, word in linea:
+                if pat_monto.match(word):
+                    monto = _parsear_monto(word)
+                    if x >= x_saldo and current["saldo"] == 0.0:
+                        current["saldo"] = monto
+                    elif x >= x_retiro and current["cargo"] == 0.0:
+                        current["cargo"] = monto
+                    elif x >= x_deposito and current["abono"] == 0.0:
+                        current["abono"] = monto
+                else:
+                    if word.upper() not in _ENCABEZADOS_TABLA:
+                        current["desc"] = (current["desc"] + " " + word).strip()[:200]
+
+    _guardar(current)
+    return movs
+
+
 def _parsear_texto_generico(texto_pagina: str, año: int) -> list:
     """
     Parser de línea por línea para bancos con formato desconocido.
@@ -416,35 +550,50 @@ def leer_estado_cuenta(base_dir: Path) -> list:
     for pdf_path in pdfs:
         progreso("estado_cuenta", 10, f"Leyendo {pdf_path.name}...")
         try:
-            # Usar fitz (pymupdf) — 10-50x más rápido que pdfplumber
-            doc = fitz.open(str(pdf_path))
+            doc     = fitz.open(str(pdf_path))
             n_pages = len(doc)
 
-            # Detectar año y formato en primera página
-            # sort=True mantiene orden de lectura (izq→der, arriba→abajo)
+            # Detectar banco y año en primera página
             primera = doc[0].get_text("text", sort=True) if n_pages > 0 else ""
-            m_año = re.search(r"(20\d{2})", primera)
+            banco   = _detectar_banco(primera)
+            m_año   = re.search(r"(20\d{2})", primera)
             if m_año:
                 año_default = int(m_año.group(1))
-            es_bbva = bool(re.search(r"\d{1,2}/[A-Z]{3}\s+\d{1,2}/[A-Z]{3}", primera))
 
+            es_bbva      = banco == "BBVA" or bool(
+                re.search(r"\d{1,2}/[A-Z]{3}\s+\d{1,2}/[A-Z]{3}", primera))
+            es_santander = banco == "SANTANDER"
+
+            movs_pdf = []
             for i, page in enumerate(doc):
                 pct = 10 + int((i + 1) / max(n_pages, 1) * 80)
                 progreso("estado_cuenta", pct,
-                         f"{pdf_path.name} pag {i+1}/{n_pages}")
-                texto = page.get_text("text", sort=True) or ""
-                if not texto.strip():
-                    continue
-                if not re.search(r"\d{1,2}/[A-Za-z]{3}|\d{1,2}/\d{1,2}/\d{2,4}", texto):
-                    continue
-                lineas = [l for l in texto.split("\n") if l.strip()]
-                if es_bbva or re.search(r"\d{1,2}/[A-Z]{3}\s+\d{1,2}/[A-Z]{3}", texto):
+                         f"{banco} {pdf_path.name} pag {i+1}/{n_pages}")
+
+                if es_santander:
+                    words = page.get_text("words", sort=True)
+                    movs_pagina = _parsear_santander_words(words, año_default)
+                elif es_bbva:
+                    texto  = page.get_text("text", sort=True) or ""
+                    lineas = [l for l in texto.split("\n") if l.strip()]
                     movs_pagina = _parsear_bloque_bbva(lineas, año_default)
                 else:
+                    texto = page.get_text("text", sort=True) or ""
+                    if not texto.strip():
+                        continue
                     movs_pagina = _parsear_texto_generico(texto, año_default)
-                movimientos.extend(movs_pagina)
 
+                movs_pdf.extend(movs_pagina)
+
+            # Etiquetar con banco de origen
+            for mv in movs_pdf:
+                mv["banco"] = banco
+                mv["archivo_pdf"] = pdf_path.name
+
+            movimientos.extend(movs_pdf)
             doc.close()
+            print(f"PROGRESO:estado_cuenta:90:{banco} {pdf_path.name}: "
+                  f"{len(movs_pdf)} movimientos", flush=True)
 
         except Exception as e:
             print(f"ADVERTENCIA: No se pudo leer {pdf_path.name}: {e}", flush=True)
