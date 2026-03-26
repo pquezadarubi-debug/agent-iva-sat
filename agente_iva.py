@@ -261,6 +261,8 @@ def parsear_cfdis(base_dir: Path, carpeta: str = "cfdi",
                         "cruce_sap":        False,
                         "metodo_cruce":     "",
                         "observaciones":    "",
+                        # Datos de factura relacionada (tipo I) — se llenan si se descarga
+                        "conceptos_factura": "",
                     })
 
         except Exception as e:
@@ -272,6 +274,61 @@ def parsear_cfdis(base_dir: Path, carpeta: str = "cfdi",
 
     progreso("cfdi", 100, f"{len(registros)} registros extraídos de {total} XMLs")
     return registros, errores
+
+
+def parsear_facturas_tipo_i(base_dir: Path) -> dict:
+    """
+    Lee XMLs tipo I de input/cfdi_facturas/.
+    Retorna {UUID_MAYUS: {rfc_emisor, nombre_emisor, rfc_receptor,
+                          nombre_receptor, conceptos_txt, conceptos: [...]}}
+    """
+    carpeta = base_dir / "input" / "cfdi_facturas"
+    if not carpeta.exists():
+        return {}
+    archivos = list(carpeta.glob("*.xml")) + list(carpeta.glob("*.XML"))
+    if not archivos:
+        return {}
+    progreso("cfdi", 0, f"Parseando {len(archivos)} facturas tipo I...")
+    facturas: dict = {}
+    for xml_path in archivos:
+        try:
+            root = ET.parse(str(xml_path)).getroot()
+            if root.get("TipoDeComprobante", "") != "I":
+                continue
+            # UUID del timbre
+            tfd = root.find(".//tfd:TimbreFiscalDigital", NS)
+            uuid = (tfd.get("UUID", "") if tfd is not None else "").upper()
+            if not uuid:
+                continue
+            em  = root.find("cfdi:Emisor",   NS)
+            rec = root.find("cfdi:Receptor",  NS)
+            rfc_e  = em.get("Rfc",    "") if em  is not None else ""
+            nom_e  = em.get("Nombre", "") if em  is not None else ""
+            rfc_r  = rec.get("Rfc",    "") if rec is not None else ""
+            nom_r  = rec.get("Nombre", "") if rec is not None else ""
+            conceptos = []
+            for c in root.findall(".//cfdi:Concepto", NS):
+                conceptos.append({
+                    "descripcion":     c.get("Descripcion", ""),
+                    "clave_prod_serv": c.get("ClaveProdServ", ""),
+                    "cantidad":        c.get("Cantidad", ""),
+                    "valor_unitario":  c.get("ValorUnitario", ""),
+                    "importe":         c.get("Importe", ""),
+                })
+            facturas[uuid] = {
+                "rfc_emisor":    rfc_e,
+                "nombre_emisor": nom_e,
+                "rfc_receptor":  rfc_r,
+                "nombre_receptor": nom_r,
+                "conceptos":     conceptos,
+                "conceptos_txt": " / ".join(
+                    c["descripcion"] for c in conceptos if c["descripcion"]
+                ),
+            }
+        except Exception:
+            pass
+    progreso("cfdi", 100, f"{len(facturas)} facturas tipo I parseadas")
+    return facturas
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1127,6 +1184,7 @@ def generar_excel(registros: list, movimientos: list,
         "IVA Retenido", "Total Pagado", "Moneda", "Tipo de Cambio",
         "Saldo Anterior", "Saldo Insoluto",
         "✓ Edo. Cuenta", "✓ Auxiliar SAP", "Método Cruce", "Observaciones",
+        "Conceptos Factura",
     ]
     # Encabezado
     for col, enc in enumerate(encabezados, 1):
@@ -1152,6 +1210,7 @@ def generar_excel(registros: list, movimientos: list,
             "✓" if r["cruce_edo_cuenta"] else "✗",
             "✓" if r["cruce_sap"] else "✗",
             r["metodo_cruce"], r["observaciones"],
+            r.get("conceptos_factura", ""),
         ]
         for col, val in enumerate(datos, 1):
             cell = ws1.cell(row=i, column=col, value=val)
@@ -1172,7 +1231,7 @@ def generar_excel(registros: list, movimientos: list,
     ws1.auto_filter.ref = ws1.dimensions
     # Anchos de columna
     anchos = [14, 36, 12, 12, 22, 20, 22, 18, 18, 14, 28, 14, 28,
-              36, 12, 10, 14, 12, 12, 14, 8, 10, 14, 14, 6, 6, 16, 30]
+              36, 12, 10, 14, 12, 12, 14, 8, 10, 14, 14, 6, 6, 16, 30, 50]
     for col, ancho in enumerate(anchos, 1):
         ws1.column_dimensions[get_column_letter(col)].width = ancho
     ws1.row_dimensions[1].height = 28
@@ -1763,12 +1822,12 @@ def _agrupar_proveedores(registros: list) -> list:
     grupos: dict = defaultdict(lambda: {
         "rfc": "", "nombre": "", "iva_total": 0.0, "monto_total": 0.0,
         "num_ops": 0, "con_cruce_banco": 0, "con_cruce_sap": 0,
-        "formas_pago": set(), "tiene_efectivo": False,
+        "formas_pago": set(), "tiene_efectivo": False, "conceptos": set(),
     })
     for r in registros:
         rfc = r.get("rfc_emisor", "SIN_RFC")
         g = grupos[rfc]
-        g["rfc"]   = rfc
+        g["rfc"]    = rfc
         g["nombre"] = r.get("nombre_emisor", "")
         g["iva_total"]   += r.get("iva16_mxn", 0.0)
         g["monto_total"] += r.get("importe_pagado_mxn", 0.0)
@@ -1779,12 +1838,17 @@ def _agrupar_proveedores(registros: list) -> list:
             g["con_cruce_sap"] += 1
         fp = r.get("forma_pago", "")
         g["formas_pago"].add(fp)
-        if fp == "01":  # Efectivo
+        if fp == "01":
             g["tiene_efectivo"] = True
+        # Añadir conceptos únicos (máx 5 por proveedor)
+        cp = r.get("conceptos_factura", "")
+        if cp:
+            g["conceptos"].add(cp[:120])
     # Serializar sets para JSON
     result = []
     for rfc, g in grupos.items():
         g["formas_pago"] = list(g["formas_pago"])
+        g["conceptos"]   = list(g["conceptos"])[:5]
         sin_cruce = g["num_ops"] - max(g["con_cruce_banco"], g["con_cruce_sap"])
         g["sin_cruce"] = max(0, sin_cruce)
         result.append(g)
@@ -2171,6 +2235,16 @@ def main():
     registros_cobro, errores_cobro = parsear_cfdis(base_dir, carpeta="cfdi_cobro",
                                                     tipo_cfdi="cobro")
     errores_cfdi = errores_pago + errores_cobro
+
+    # ── PASO 2b: Facturas tipo I relacionadas ────────────────────────────────
+    progreso("cfdi", 80, "Parseando facturas tipo I (si existen)...")
+    facturas_i = parsear_facturas_tipo_i(base_dir)
+    if facturas_i:
+        progreso("cfdi", 90, f"Enriqueciendo registros con {len(facturas_i)} facturas tipo I")
+        for r in registros_pago + registros_cobro:
+            uuid_fac = r.get("uuid_factura", "").upper()
+            if uuid_fac and uuid_fac in facturas_i:
+                r["conceptos_factura"] = facturas_i[uuid_fac]["conceptos_txt"]
     # Para el procesamiento principal usamos los de pago
     registros = registros_pago
     todos_registros = registros_pago + registros_cobro

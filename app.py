@@ -78,7 +78,7 @@ def _session_dir(sid: str) -> Path:
     d = SESSIONS_DIR / sid
     for sub in ["input/cfdi_cobro", "input/cfdi_pago", "input/aux_cobrado",
                 "input/aux_pagado", "input/pdf_bancos", "input/aux_bancos",
-                "input/machote", "output",
+                "input/machote", "input/cfdi_facturas", "output",
                 "input/cfdi", "input/estado_cuenta", "input/auxiliar"]:
         (d / sub).mkdir(parents=True, exist_ok=True)
     return d
@@ -477,6 +477,28 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     </div>
   </div>
 
+  <!-- SECCION OPCIONAL: Facturas tipo I (si se tienen manualmente) -->
+  <div class="card">
+    <div class="ctitle" style="color:#5C3D2E">&#128203; Facturas relacionadas — Opcional</div>
+    <p style="font-size:11px;color:#666;margin-bottom:10px">
+      Si tienes los XML de las facturas (tipo I, Ingreso) relacionadas a los pagos, s&uacute;belas aqu&iacute;.
+      Si usas la <strong>Descarga SAT</strong>, se descargan autom&aacute;ticamente.
+      Permiten enriquecer los reportes con los <em>conceptos</em> de cada factura para el an&aacute;lisis de riesgos.
+    </p>
+    <div style="max-width:340px">
+      <div class="uzone" id="z-cfdi-facturas" ondragover="drag(event,'cfdi-facturas')"
+           ondragleave="undrag('cfdi-facturas')" ondrop="drop(event,'cfdi-facturas')">
+        <button class="ubtn-del" onclick="borrarZona(event,'cfdi-facturas')">&#10005; Borrar</button>
+        <input type="file" multiple accept=".xml,.XML"
+               onchange="subirMultiple(this,'cfdi-facturas')" id="inp-cfdi-facturas">
+        <div class="uicon">&#128196;</div>
+        <div class="ulabel">Facturas tipo I relacionadas</div>
+        <div class="usub">XML de facturas pagadas o cobradas</div>
+        <div class="ust" id="st-cfdi-facturas">Opcional</div>
+      </div>
+    </div>
+  </div>
+
   <!-- Machote eliminado: el escrito se genera automáticamente desde plantilla integrada -->
 
   <div class="card">
@@ -756,13 +778,14 @@ async function guardarConfig(){
 // ─── Estado inicial ───────────────────────────────────────────────────────
 async function actualizarEstado(){
   const d = await (await fetch('/estado',{headers:{'X-Sid':SID}})).json();
-  setZone('cfdi-cobro',  d.cfdi_cobro,  d.cfdi_cobro+' XML');
-  setZone('cfdi-pago',   d.cfdi_pago,   d.cfdi_pago+' XML');
-  setZone('aux-cobrado', d.aux_cobrado, d.aux_cobrado+' Excel');
-  setZone('aux-pagado',  d.aux_pagado,  d.aux_pagado+' Excel');
-  setZone('pdf-bancos',  d.pdf_bancos,  d.pdf_bancos+' PDF');
-  setZone('aux-bancos',  d.aux_bancos,  d.aux_bancos+' Excel');
-  setZone('machote',     d.machote,     d.machote ? 'Cargado' : 'Opcional', true);
+  setZone('cfdi-cobro',    d.cfdi_cobro,    d.cfdi_cobro+' XML');
+  setZone('cfdi-pago',     d.cfdi_pago,     d.cfdi_pago+' XML');
+  setZone('cfdi-facturas', d.cfdi_facturas, d.cfdi_facturas+' XML (facturas)', true);
+  setZone('aux-cobrado',   d.aux_cobrado,   d.aux_cobrado+' Excel');
+  setZone('aux-pagado',    d.aux_pagado,    d.aux_pagado+' Excel');
+  setZone('pdf-bancos',    d.pdf_bancos,    d.pdf_bancos+' PDF');
+  setZone('aux-bancos',    d.aux_bancos,    d.aux_bancos+' Excel');
+  setZone('machote',       d.machote,       d.machote ? 'Cargado' : 'Opcional', true);
 }
 function setZone(z, n, txt, opcional){
   const el = document.getElementById('z-'+z);
@@ -1039,13 +1062,14 @@ def _check_sid(sid: str) -> bool:
 
 
 ALLOWED_EXT = {
-    "cfdi-cobro":  {".xml"},
-    "cfdi-pago":   {".xml"},
-    "aux-cobrado": {".xlsx", ".xls"},
-    "aux-pagado":  {".xlsx", ".xls"},
-    "pdf-bancos":  {".pdf"},
-    "aux-bancos":  {".xlsx", ".xls"},
-    "machote":     {".docx"},
+    "cfdi-cobro":     {".xml"},
+    "cfdi-pago":      {".xml"},
+    "cfdi-facturas":  {".xml"},
+    "aux-cobrado":    {".xlsx", ".xls"},
+    "aux-pagado":     {".xlsx", ".xls"},
+    "pdf-bancos":     {".pdf"},
+    "aux-bancos":     {".xlsx", ".xls"},
+    "machote":        {".docx"},
 }
 
 OUTPUT_MAP = {
@@ -1171,13 +1195,14 @@ def upload():
 
     base = _session_dir(sid)
     destdir_map = {
-        "cfdi-cobro":  base / "input" / "cfdi_cobro",
-        "cfdi-pago":   base / "input" / "cfdi_pago",
-        "aux-cobrado": base / "input" / "aux_cobrado",
-        "aux-pagado":  base / "input" / "aux_pagado",
-        "pdf-bancos":  base / "input" / "pdf_bancos",
-        "aux-bancos":  base / "input" / "aux_bancos",
-        "machote":     base / "input" / "machote",
+        "cfdi-cobro":    base / "input" / "cfdi_cobro",
+        "cfdi-pago":     base / "input" / "cfdi_pago",
+        "cfdi-facturas": base / "input" / "cfdi_facturas",
+        "aux-cobrado":   base / "input" / "aux_cobrado",
+        "aux-pagado":    base / "input" / "aux_pagado",
+        "pdf-bancos":    base / "input" / "pdf_bancos",
+        "aux-bancos":    base / "input" / "aux_bancos",
+        "machote":       base / "input" / "machote",
     }
     nombre = secure_filename(f.filename)
     dest   = destdir_map[tipo] / nombre
@@ -1207,13 +1232,14 @@ def estado():
     def count_xls(d): return len(list(d.glob("*.xlsx")) + list(d.glob("*.xls")) + list(d.glob("*.XLSX")))
     def count_pdf(d): return len(list(d.glob("*.pdf")) + list(d.glob("*.PDF")))
     return jsonify({
-        "cfdi_cobro":  count_xml(base / "input" / "cfdi_cobro"),
-        "cfdi_pago":   count_xml(base / "input" / "cfdi_pago"),
-        "aux_cobrado": count_xls(base / "input" / "aux_cobrado"),
-        "aux_pagado":  count_xls(base / "input" / "aux_pagado"),
-        "pdf_bancos":  count_pdf(base / "input" / "pdf_bancos"),
-        "aux_bancos":  count_xls(base / "input" / "aux_bancos"),
-        "machote":     bool(list((base / "input" / "machote").glob("*.docx"))),
+        "cfdi_cobro":    count_xml(base / "input" / "cfdi_cobro"),
+        "cfdi_pago":     count_xml(base / "input" / "cfdi_pago"),
+        "cfdi_facturas": count_xml(base / "input" / "cfdi_facturas"),
+        "aux_cobrado":   count_xls(base / "input" / "aux_cobrado"),
+        "aux_pagado":    count_xls(base / "input" / "aux_pagado"),
+        "pdf_bancos":    count_pdf(base / "input" / "pdf_bancos"),
+        "aux_bancos":    count_xls(base / "input" / "aux_bancos"),
+        "machote":       bool(list((base / "input" / "machote").glob("*.docx"))),
     })
 
 
@@ -1367,13 +1393,14 @@ def limpiar_zona():
     datos = request.get_json(force=True, silent=True) or {}
     tipo  = datos.get("tipo", "")
     destdir_map = {
-        "cfdi-cobro":  "cfdi_cobro",
-        "cfdi-pago":   "cfdi_pago",
-        "aux-cobrado": "aux_cobrado",
-        "aux-pagado":  "aux_pagado",
-        "pdf-bancos":  "pdf_bancos",
-        "aux-bancos":  "aux_bancos",
-        "machote":     "machote",
+        "cfdi-cobro":    "cfdi_cobro",
+        "cfdi-pago":     "cfdi_pago",
+        "cfdi-facturas": "cfdi_facturas",
+        "aux-cobrado":   "aux_cobrado",
+        "aux-pagado":    "aux_pagado",
+        "pdf-bancos":    "pdf_bancos",
+        "aux-bancos":    "aux_bancos",
+        "machote":       "machote",
     }
     if tipo not in destdir_map:
         return jsonify({"ok": False, "error": "tipo invalido"}), 400
@@ -1409,8 +1436,11 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
                          key_bytes: bytes, password: str,
                          fecha_ini, fecha_fin,
                          emitidos: bool, recibidos: bool):
-    """Background thread: descarga CFDIs tipo P del SAT usando FIEL."""
+    """Background thread: descarga CFDIs tipo P del SAT usando FIEL,
+    luego descarga las facturas tipo I relacionadas (DoctoRelacionado)."""
     import zipfile as _zipfile, io as _io
+    import xml.etree.ElementTree as _ET
+    import datetime as _dt
     log_path = base_dir / "sat_download.log"
 
     def _log(msg: str):
@@ -1436,30 +1466,59 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
             return
 
         sat_svc = SAT(signer=signer)
+        _NS_PAG20 = "http://www.sat.gob.mx/Pagos20"
+        _NS_TFD   = "http://www.sat.gob.mx/TimbreFiscalDigital"
 
-        def _extract_tipo_p(data: bytes, out_dir: Path) -> int:
-            """Extrae XMLs tipo P de un ZIP y los guarda en out_dir."""
-            count = 0
+        def _extract_from_zip(data: bytes, tipo_filter: str | None) -> dict:
+            """Extrae XMLs de un ZIP, filtrando por TipoDeComprobante si se indica.
+            Retorna {filename: xml_bytes}."""
+            result: dict = {}
             try:
                 with _zipfile.ZipFile(_io.BytesIO(data)) as zf:
                     for name in zf.namelist():
                         if not name.lower().endswith(".xml"):
                             continue
-                        xml_bytes = zf.read(name)
-                        if (b'TipoDeComprobante="P"' in xml_bytes or
-                                b"TipoDeComprobante='P'" in xml_bytes):
-                            dest = out_dir / Path(name).name
-                            dest.write_bytes(xml_bytes)
-                            count += 1
-            except Exception as exc2:
-                _log(f"ADVERTENCIA: error extrayendo paquete: {exc2}")
-            return count
+                        xb = zf.read(name)
+                        if tipo_filter:
+                            marker_dq = f'TipoDeComprobante="{tipo_filter}"'.encode()
+                            marker_sq = f"TipoDeComprobante='{tipo_filter}'".encode()
+                            if marker_dq not in xb and marker_sq not in xb:
+                                continue
+                        result[Path(name).name] = xb
+            except Exception as ex2:
+                _log(f"ADVERTENCIA ZIP: {ex2}")
+            return result
 
+        def _docto_uuids(xml_bytes: bytes) -> set:
+            """Extrae UUIDs de DoctoRelacionado de un tipo P."""
+            uuids: set = set()
+            try:
+                root = _ET.fromstring(xml_bytes)
+                for dr in root.iter(f"{{{_NS_PAG20}}}DoctoRelacionado"):
+                    uid = dr.get("IdDocumento", "")
+                    if uid:
+                        uuids.add(uid.upper())
+            except Exception:
+                pass
+            return uuids
+
+        def _uuid_from_tfd(xml_bytes: bytes) -> str:
+            """Extrae el UUID del TimbreFiscalDigital."""
+            try:
+                root = _ET.fromstring(xml_bytes)
+                for tfd in root.iter(f"{{{_NS_TFD}}}TimbreFiscalDigital"):
+                    return tfd.get("UUID", "").upper()
+            except Exception:
+                pass
+            return ""
+
+        all_docto_uuids: set = set()
+
+        # ── Fase 1: CFDIs tipo P ─────────────────────────────────────────────
         if emitidos:
-            _log("Solicitando CFDIs emitidos (IVA Cobrado) al SAT...")
+            _log("Solicitando CFDIs emitidos (tipo P) al SAT...")
             cobro_dir = base_dir / "input" / "cfdi_cobro"
-            total_e = 0
-            paq = 0
+            total_e = 0; paq = 0
             try:
                 for _, data in sat_svc.recover_comprobante_iwait(
                     fecha_inicial=fecha_ini, fecha_final=fecha_fin,
@@ -1467,18 +1526,20 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
                     tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
                 ):
                     paq += 1
-                    n = _extract_tipo_p(data, cobro_dir)
-                    total_e += n
-                    _log(f"Paquete emitidos {paq}: {n} CFDIs tipo P guardados")
+                    xmls = _extract_from_zip(data, "P")
+                    for fname, xb in xmls.items():
+                        (cobro_dir / fname).write_bytes(xb)
+                        all_docto_uuids.update(_docto_uuids(xb))
+                        total_e += 1
+                    _log(f"Paquete emitidos {paq}: acumulados {total_e} tipo P")
             except Exception as exc:
                 _log(f"ADVERTENCIA emitidos: {exc}")
-            _log(f"OK Total emitidos (tipo P): {total_e} archivos en cfdi_cobro/")
+            _log(f"OK Emitidos tipo P: {total_e} en cfdi_cobro/")
 
         if recibidos:
-            _log("Solicitando CFDIs recibidos (IVA Pagado) al SAT...")
+            _log("Solicitando CFDIs recibidos (tipo P) al SAT...")
             pago_dir = base_dir / "input" / "cfdi_pago"
-            total_r = 0
-            paq = 0
+            total_r = 0; paq = 0
             try:
                 for _, data in sat_svc.recover_comprobante_iwait(
                     fecha_inicial=fecha_ini, fecha_final=fecha_fin,
@@ -1486,12 +1547,54 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
                     tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
                 ):
                     paq += 1
-                    n = _extract_tipo_p(data, pago_dir)
-                    total_r += n
-                    _log(f"Paquete recibidos {paq}: {n} CFDIs tipo P guardados")
+                    xmls = _extract_from_zip(data, "P")
+                    for fname, xb in xmls.items():
+                        (pago_dir / fname).write_bytes(xb)
+                        all_docto_uuids.update(_docto_uuids(xb))
+                        total_r += 1
+                    _log(f"Paquete recibidos {paq}: acumulados {total_r} tipo P")
             except Exception as exc:
                 _log(f"ADVERTENCIA recibidos: {exc}")
-            _log(f"OK Total recibidos (tipo P): {total_r} archivos en cfdi_pago/")
+            _log(f"OK Recibidos tipo P: {total_r} en cfdi_pago/")
+
+        # ── Fase 2: Facturas tipo I relacionadas ─────────────────────────────
+        if all_docto_uuids:
+            _log(f"Descargando facturas tipo I para {len(all_docto_uuids)} UUIDs relacionados...")
+            facturas_dir = base_dir / "input" / "cfdi_facturas"
+            facturas_dir.mkdir(parents=True, exist_ok=True)
+
+            # Ampliar rango: 2 años atrás (facturas pueden ser de periodos previos)
+            try:
+                fac_ini = _dt.date(max(2020, fecha_ini.year - 2), 1, 1)
+            except Exception:
+                fac_ini = fecha_ini
+
+            total_fac = 0; paq = 0
+
+            for rfc_param, desc in [("rfc_emisor", "emitidas"), ("rfc_receptor", "recibidas")]:
+                paq = 0
+                try:
+                    for _, data in sat_svc.recover_comprobante_iwait(
+                        fecha_inicial=fac_ini, fecha_final=fecha_fin,
+                        **{rfc_param: signer.rfc},
+                        tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
+                    ):
+                        paq += 1
+                        xmls = _extract_from_zip(data, "I")
+                        for fname, xb in xmls.items():
+                            uuid_fac = _uuid_from_tfd(xb)
+                            if uuid_fac in all_docto_uuids:
+                                dest = facturas_dir / fname
+                                if not dest.exists():
+                                    dest.write_bytes(xb)
+                                    total_fac += 1
+                        _log(f"Facturas {desc} paquete {paq}: {total_fac} matching acumuladas")
+                except Exception as exc:
+                    _log(f"ADVERTENCIA facturas {desc}: {exc}")
+
+            _log(f"OK Facturas tipo I guardadas: {total_fac} en cfdi_facturas/")
+        else:
+            _log("Sin UUIDs de DoctoRelacionado — omitiendo descarga tipo I")
 
         _log("RESULTADO_SAT:OK")
 
