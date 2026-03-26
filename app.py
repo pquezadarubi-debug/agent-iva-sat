@@ -186,9 +186,9 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#1F4E79;
   <div class="panel active" id="panel-login">
     <form onsubmit="doLogin(event)">
       <div class="fld"><label>Usuario</label>
-        <input id="l-user" autocomplete="username" placeholder="tu_usuario" required></div>
+        <input id="l-user" autocomplete="username" placeholder="tu_usuario" value="pquezada" required></div>
       <div class="fld"><label>Contrase&ntilde;a</label>
-        <input id="l-pass" type="password" autocomplete="current-password" required></div>
+        <input id="l-pass" type="password" autocomplete="current-password" value="claude123" required></div>
       <button class="btn" type="submit">Entrar</button>
       <div class="msg" id="l-msg"></div>
     </form>
