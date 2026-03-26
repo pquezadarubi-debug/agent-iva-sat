@@ -462,22 +462,7 @@ header{background:var(--az);color:#fff;padding:10px 20px;
     </div>
   </div>
 
-  <!-- Machote Word (opcional) -->
-  <div class="card">
-    <div class="ctitle">Machote Word <em style="font-weight:normal">(opcional)</em></div>
-    <div class="upload-grid" style="grid-template-columns:1fr 1fr">
-      <div class="uzone" id="z-machote" ondragover="drag(event,'machote')"
-           ondragleave="undrag('machote')" ondrop="drop(event,'machote')">
-        <button class="ubtn-del" onclick="borrarZona(event,'machote')">&#10005; Borrar</button>
-        <input type="file" accept=".docx,.DOCX"
-               onchange="subirUno(this,'machote')" id="inp-machote">
-        <div class="uicon">&#128221;</div>
-        <div class="ulabel">Machote Word</div>
-        <div class="usub">Plantilla escrito SAT &mdash; .docx</div>
-        <div class="ust" id="st-machote">Opcional</div>
-      </div>
-    </div>
-  </div>
+  <!-- Machote eliminado: el escrito se genera automáticamente desde plantilla integrada -->
 
   <div class="card">
     <div class="ctitle">2 — Datos de la empresa</div>

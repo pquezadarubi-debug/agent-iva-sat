@@ -1689,44 +1689,25 @@ def generar_escrito_word(cfg: dict, registros: list,
         "{{FOLIO_SAT}}":       folio_sat,
     }
 
-    if machote_p.exists():
-        # Usar machote existente
-        doc = Document(str(machote_p))
-        for parrafo in doc.paragraphs:
-            _reemplazar_en_parrafo(parrafo, marcadores)
-        for tabla in doc.tables:
-            for fila in tabla.rows:
-                for celda in fila.cells:
-                    for parrafo in celda.paragraphs:
-                        _reemplazar_en_parrafo(parrafo, marcadores)
-        # Encabezados y pies de página
-        for seccion in doc.sections:
-            for parrafo in seccion.header.paragraphs:
-                _reemplazar_en_parrafo(parrafo, marcadores)
-            for parrafo in seccion.footer.paragraphs:
-                _reemplazar_en_parrafo(parrafo, marcadores)
-    else:
-        # Generar desde el machote integrado
-        doc = Document()
-        # Configurar página tamaño carta
-        from docx.shared import Inches
-        sec = doc.sections[0]
-        sec.page_width  = Cm(21.59)
-        sec.page_height = Cm(27.94)
-        sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = Cm(2.5)
+    # Generar siempre desde el texto integrado (no usar machote externo)
+    doc = Document()
+    sec = doc.sections[0]
+    sec.page_width  = Cm(21.59)
+    sec.page_height = Cm(27.94)
+    sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = Cm(2.5)
 
-        texto_final = MACHOTE_TEXTO
-        for marca, valor in marcadores.items():
-            texto_final = texto_final.replace(marca, str(valor))
+    texto_final = MACHOTE_TEXTO
+    for marca, valor in marcadores.items():
+        texto_final = texto_final.replace(marca, str(valor))
 
-        for linea in texto_final.split("\n"):
-            p = doc.add_paragraph(linea)
-            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            for run in p.runs:
-                run.font.name = "Times New Roman"
-                run.font.size = Pt(12)
-            p.paragraph_format.space_after = Pt(0)
-            p.paragraph_format.line_spacing = Pt(18)  # 1.5 aprox.
+    for linea in texto_final.split("\n"):
+        p = doc.add_paragraph(linea)
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        for run in p.runs:
+            run.font.name = "Times New Roman"
+            run.font.size = Pt(12)
+        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.line_spacing = Pt(18)
 
     doc.save(str(out_path))
     progreso("word", 100, f"Escrito Word guardado: {out_path.name}")
