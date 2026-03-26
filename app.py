@@ -910,6 +910,17 @@ def login_post():
     password = datos.get("password", "")
     if not username or not password:
         return jsonify({"ok": False, "error": "Usuario y contraseña requeridos"})
+
+    # Verificar primero contra variables de entorno (siempre disponibles)
+    admin_user = os.environ.get("ADMIN_USER", "").strip().lower()
+    admin_pass = os.environ.get("ADMIN_PASS", "")
+    if admin_user and username == admin_user and password == admin_pass:
+        session["username"] = username
+        session.permanent = True
+        app.permanent_session_lifetime = datetime.timedelta(days=30)
+        return jsonify({"ok": True})
+
+    # Luego verificar usuarios registrados (en /tmp, pueden perderse al reiniciar)
     users = _load_users()
     if username not in users:
         return jsonify({"ok": False, "error": "Usuario no encontrado"})
