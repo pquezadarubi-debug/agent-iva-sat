@@ -1889,6 +1889,7 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
                 fecha_inicial=fecha_ini, fecha_final=fecha_fin,
                 rfc_emisor=rfc,
                 tipo_comprobante="P",
+                estado_comprobante="Vigente",
                 tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
             ):
                 paq += 1
@@ -1910,6 +1911,7 @@ def _sat_download_worker(sid: str, base_dir: Path, cer_bytes: bytes,
                 fecha_inicial=fecha_ini, fecha_final=fecha_fin,
                 rfc_receptor=rfc,
                 tipo_comprobante="P",
+                estado_comprobante="Vigente",
                 tipo_solicitud=TipoDescargaMasivaTerceros.CFDI
             ):
                 paq += 1
